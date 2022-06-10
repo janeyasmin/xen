@@ -42,7 +42,7 @@ void svm_asid_handle_vmrun(void)
     struct hvm_vcpu_asid *p_asid =
         nestedhvm_vcpu_in_guestmode(curr)
         ? &vcpu_nestedhvm(curr).nv_n2asid : &curr->arch.hvm.n1asid;
-    bool need_flush = hvm_asid_handle_vmenter(p_asid);
+    bool need_flush = true; /* HARDCODING FOR TESTING. */
 
     /* ASID 0 indicates that ASIDs are disabled. */
     if ( p_asid->asid == 0 )

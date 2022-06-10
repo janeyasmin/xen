@@ -78,6 +78,12 @@ enum GenericIntercept2bits
     GENERAL2_INTERCEPT_RDPRU   = 1 << 14,
 };
 
+/* general 3 intercepts */
+enum GenericIntercept3bits
+{
+    GENERAL3_INTERCEPT_INVLPGB = 1 << 0,
+    GENERAL3_INTERCEPT_TLBSYNC = 1 << 4,
+};
 
 /* control register intercepts */
 enum CRInterceptBits
@@ -302,6 +308,7 @@ enum VMEXIT_EXITCODE
     VMEXIT_MWAIT_CONDITIONAL= 140, /* 0x8c */
     VMEXIT_XSETBV           = 141, /* 0x8d */
     VMEXIT_RDPRU            = 142, /* 0x8e */
+    VMEXIT_INVLPGB          = 143, /* 0x8f */
     /* Remember to also update VMEXIT_NPF_PERFC! */
     VMEXIT_NPF              = 1024, /* 0x400, nested paging fault */
     /* Remember to also update SVM_PERF_EXIT_REASON_SIZE! */

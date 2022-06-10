@@ -45,6 +45,13 @@ static inline void svm_invlpga(unsigned long linear, uint32_t asid)
         "a" (linear), "c" (asid));
 }
 
+/*
+static inline void svm_invlpgb(unsigned long linear, uint32_t asid, unsigned int cpu)
+{
+
+};
+*/
+
 struct cpu_user_regs;
 struct vcpu;
 

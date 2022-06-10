@@ -2427,6 +2427,13 @@ static void svm_vmexit_do_invalidate_cache(struct cpu_user_regs *regs,
     __update_guest_eip(regs, inst_len);
 }
 
+/*
+static void svm_invlpgb_intercept(
+    )
+{
+} ;
+*/
+
 static void svm_invlpga_intercept(
     struct vcpu *v, unsigned long linear, uint32_t asid)
 {
@@ -2942,6 +2949,7 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
         break;
 
     case VMEXIT_INVLPG:
+        printk("*****VMEXIT_INVLPG******\n");
         if ( cpu_has_svm_decode )
         {
             svm_invlpg_intercept(vmcb->exitinfo1);
@@ -2952,6 +2960,7 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
         break;
 
     case VMEXIT_INVLPGA:
+        printk("*****VMEXIT_INVLPGA******\n");
         if ( !nsvm_efer_svm_enabled(v) )
         {
             hvm_inject_hw_exception(TRAP_invalid_op, X86_EVENT_NO_EC);
@@ -2961,6 +2970,9 @@ void svm_vmexit_handler(struct cpu_user_regs *regs)
             break;
         svm_invlpga_intercept(v, regs->rax, regs->ecx);
         __update_guest_eip(regs, insn_len);
+        break;
+
+    case VMEXIT_INVLPGB:
         break;
 
     case VMEXIT_VMMCALL:

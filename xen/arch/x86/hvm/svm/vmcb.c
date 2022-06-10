@@ -157,7 +157,7 @@ static int construct_vmcb(struct vcpu *v)
          * No point in intercepting INVLPG if we don't have shadow pagetables
          * that need to be fixed up.
          */
-        vmcb->_general1_intercepts &= ~GENERAL1_INTERCEPT_INVLPG;
+        vmcb->_general1_intercepts &= GENERAL1_INTERCEPT_INVLPG;
 
         /* PAT is under complete control of SVM when using nested paging. */
         svm_disable_intercept_for_msr(v, MSR_IA32_CR_PAT);
