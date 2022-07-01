@@ -23,6 +23,7 @@
 #include <xen/smp.h>
 #include <xen/percpu.h>
 #include <asm/hvm/asid.h>
+#include <asm/hvm/nestedhvm.h> /* for nestedhvm_vcpu_in_guestmode */
 
 /* Xen command-line option to enable ASIDs */
 static bool __read_mostly opt_asid_enabled = true;
@@ -51,8 +52,6 @@ boolean_param("asid", opt_asid_enabled);
 
 /* Per-CPU ASID management. */
 struct hvm_asid_data {
-   uint64_t core_asid_generation;
-   uint32_t next_asid;
    uint32_t max_asid;
    bool_t disabled;
 };
@@ -74,16 +73,21 @@ void hvm_asid_init(int nasids)
             g_disabled = data->disabled;
     }
 
-    /* Zero indicates 'invalid generation', so we start the count at one. */
-    data->core_asid_generation = 1;
-
-    /* Zero indicates 'ASIDs disabled', so we start the count at one. */
-    data->next_asid = 1;
 }
 
 void hvm_asid_flush_vcpu_asid(struct hvm_vcpu_asid *asid)
 {
-    write_atomic(&asid->generation, 0);
+    asid->need_flush &= TLB_CTRL_FLUSH_ASID;
+}
+
+void hvm_asid_flush_all(void)
+{
+    struct vcpu *v = current;
+    struct hvm_vcpu_asid *asid =
+        nestedhvm_vcpu_in_guestmode(v)
+        ? &vcpu_nestedhvm(v).nv_n2asid : &v->arch.hvm.n1asid;
+
+    asid->need_flush = TLB_CTRL_FLUSH_ALL;
 }
 
 void hvm_asid_flush_vcpu(struct vcpu *v)
@@ -92,59 +96,39 @@ void hvm_asid_flush_vcpu(struct vcpu *v)
     hvm_asid_flush_vcpu_asid(&vcpu_nestedhvm(v).nv_n2asid);
 }
 
-void hvm_asid_flush_core(void)
+bool_t hvm_asid_handle_vmenter(struct vcpu *v)
 {
     struct hvm_asid_data *data = &this_cpu(hvm_asid_data);
+    struct hvm_vcpu_asid *p_asid =
+        nestedhvm_vcpu_in_guestmode(v)
+        ? &vcpu_nestedhvm(v).nv_n2asid : &v->arch.hvm.n1asid;
+    struct domain *d = v->domain;
+    unsigned int flags;
 
-    if ( data->disabled )
-        return;
-
-    if ( likely(++data->core_asid_generation != 0) )
-        return;
-
-    /*
-     * ASID generations are 64 bit.  Overflow of generations never happens.
-     * For safety, we simply disable ASIDs, so correctness is established; it
-     * only runs a bit slower.
-     */
-    printk("HVM: ASID generation overrun. Disabling ASIDs.\n");
-    data->disabled = 1;
-}
-
-bool_t hvm_asid_handle_vmenter(struct hvm_vcpu_asid *asid)
-{
-    struct hvm_asid_data *data = &this_cpu(hvm_asid_data);
-
-    /* On erratum #170 systems we must flush the TLB. 
-     * Generation overruns are taken here, too. */
     if ( data->disabled )
         goto disabled;
 
-    /* Test if VCPU has valid ASID. */
-    if ( read_atomic(&asid->generation) == data->core_asid_generation )
-        return 0;
+    if ( nestedhvm_vcpu_in_guestmode(v) )
+        p_asid->asid = data->max_asid; // this wants to be the max_domid + 1
+    else
+        p_asid->asid = d->domain_id + 1;
 
-    /* If there are no free ASIDs, need to go to a new generation */
-    if ( unlikely(data->next_asid > data->max_asid) )
+    /* Overflow of ASIDs never happens, but if it does disable its usage. */
+    if ( unlikely(p_asid->asid > data->max_asid) )
     {
-        hvm_asid_flush_core();
-        data->next_asid = 1;
-        if ( data->disabled )
-            goto disabled;
+        data->disabled = 1;
+        goto disabled;
     }
 
-    /* Now guaranteed to be a free ASID. */
-    asid->asid = data->next_asid++;
-    write_atomic(&asid->generation, data->core_asid_generation);
+    flags = (p_asid->need_flush == 0xff) ? TLB_CTRL_NO_FLUSH : p_asid->need_flush;
+    p_asid->need_flush = 0xff;
 
-    /*
-     * When we assign ASID 1, flush all TLB entries as we are starting a new
-     * generation, and all old ASID allocations are now stale. 
-     */
-    return (asid->asid == 1);
-
- disabled:
-    asid->asid = 0;
+    printk("v%d - asid = %d need_flush = %d\n",
+           v->vcpu_id, p_asid->asid, flags);
+    return flags;
+disabled:
+    p_asid->asid = 0;
+    p_asid->need_flush = TLB_CTRL_NO_FLUSH;
     return 0;
 }
 

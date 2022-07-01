@@ -4690,7 +4690,7 @@ bool vmx_vmenter_helper(const struct cpu_user_regs *regs)
         p_asid = &curr->arch.hvm.n1asid;
 
     old_asid = p_asid->asid;
-    need_flush = hvm_asid_handle_vmenter(p_asid);
+    need_flush = hvm_asid_handle_vmenter(curr);
     new_asid = p_asid->asid;
 
     if ( unlikely(new_asid != old_asid) )

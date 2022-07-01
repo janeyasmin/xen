@@ -29,8 +29,8 @@
 #include <public/hvm/ioreq.h>
 
 struct hvm_vcpu_asid {
-    uint64_t generation;
     uint32_t asid;
+    uint8_t need_flush; /* TLB_CTRL_* */
 };
 
 /*
