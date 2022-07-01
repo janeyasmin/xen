@@ -199,5 +199,8 @@ static inline int clean_dcache_va_range(const void *p, unsigned long size)
 
 unsigned int guest_flush_tlb_flags(const struct domain *d);
 void guest_flush_tlb_mask(const struct domain *d, const cpumask_t *mask);
+void guest_invlpg_all(const struct domain *d, const unsigned long va);
+
+void invlpgb_mask(const cpumask_t *mask, const unsigned long va);
 
 #endif /* __FLUSHTLB_H__ */

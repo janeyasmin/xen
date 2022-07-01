@@ -274,6 +274,13 @@ void flush_area_mask(const cpumask_t *mask, const void *va, unsigned int flags)
     if ( (flags & ~FLUSH_ORDER_MASK) &&
          !cpumask_subset(mask, cpumask_of(cpu)) )
     {
+	unsigned long addr = (unsigned long)va;
+	if ( cpu_has_tlb_invlpgb_sync ) // && ANOTHER CHECK
+	{
+	    invlpgb_mask(mask, addr);
+	    return;
+	}
+
         if ( cpu_has_hypervisor &&
              !(flags & ~(FLUSH_TLB | FLUSH_TLB_GLOBAL | FLUSH_VA_VALID |
                          FLUSH_ORDER_MASK)) &&

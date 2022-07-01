@@ -14,6 +14,7 @@
 #include <asm/cache.h>
 #include <asm/flushtlb.h>
 #include <asm/invpcid.h>
+#include <asm/invlpgb.h>
 #include <asm/nops.h>
 #include <asm/page.h>
 #include <asm/pv/domain.h>
@@ -36,6 +37,8 @@ DEFINE_PER_CPU(u32, tlbflush_time);
 
 /* Signals whether the TLB flush clock is in use. */
 bool __read_mostly tlb_clk_enabled = true;
+
+typedef struct { DECLARE_BITMAP(bits, 16); } flush_asidmask_t;
 
 /*
  * pre_flush(): Increment the virtual TLB-flush clock. Returns new clock value.
@@ -359,4 +362,35 @@ void guest_flush_tlb_mask(const struct domain *d, const cpumask_t *mask)
 
     if ( flags )
         flush_mask(mask, flags);
+}
+
+void guest_invlpg_all(const struct domain *d, const unsigned long va)
+{
+    if ( is_hvm_domain(d) )
+	invlpgb_asid_one(va, d->vcpu[0]->arch.hvm.n1asid.asid);
+    else
+	invlpgb_addr(va);
+}
+
+void invlpgb_mask(const cpumask_t *flush_cpumask, const unsigned long va)
+{
+    flush_asidmask_t flush_asidmask;
+    unsigned int cpu, asid;
+/*
+    if ( !is_hvm_domain(d) )
+    {
+	invlpgb_addr(va);
+	return;
+    }
+*/
+    for_each_cpu(cpu, flush_cpumask)
+    {
+	struct vcpu *v = per_cpu(curr_vcpu, cpu);
+	set_bit(v->arch.hvm.n1asid.asid, &flush_asidmask);
+    }
+    for(asid = 0; asid < 16; asid++)
+    {
+	if (test_bit(asid, &flush_asidmask))
+	    invlpgb_asid_one(va, asid);
+    }
 }

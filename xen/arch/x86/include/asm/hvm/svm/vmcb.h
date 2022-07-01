@@ -461,6 +461,8 @@ struct vmcb_struct {
             bool _gmet          :1;
             bool _np_sss        :1;
             bool _vte           :1;
+            bool reserved       :1;
+            bool tlb_invl_sync  :1;
         };
         uint64_t _np_ctrl;
     };

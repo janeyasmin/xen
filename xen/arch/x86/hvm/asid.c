@@ -56,6 +56,8 @@ struct hvm_asid_data {
    bool_t disabled;
 };
 
+typedef struct { DECLARE_BITMAP(bits, 16); } flush_asidmask_t;
+
 static DEFINE_PER_CPU(struct hvm_asid_data, hvm_asid_data);
 
 void hvm_asid_init(int nasids)
