@@ -95,6 +95,12 @@ struct hvm_vcpu_nonreg_state {
     };
 };
 
+/* These happen to be the same as the SVM TLB control function definitions.*/
+#define HVM_ENTRY_TLB_NO_FLUSH             0x00000000
+#define HVM_ENTRY_TLB_FLUSH_ALL            0x00000001
+#define HVM_ENTRY_TLB_FLUSH_ASID           0x00000002
+#define HVM_ENTRY_TLB_FLUSH_ASID_NONGLOBAL 0x00000003
+
 /*
  * The hardware virtual machine (HVM) interface abstracts away from the
  * x86/x86_64 CPU virtualization assist specifics. Currently this interface
@@ -480,7 +486,7 @@ static inline void hvm_set_tsc_offset(struct vcpu *v, uint64_t offset,
 static inline void hvm_flush_guest_tlbs(void)
 {
     if ( hvm_enabled )
-        hvm_asid_flush_core();
+        hvm_asid_flush_tlb_all();
 }
 
 static inline unsigned int

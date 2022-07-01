@@ -4666,7 +4666,7 @@ bool vmx_vmenter_helper(const struct cpu_user_regs *regs)
     struct domain *currd = curr->domain;
     u32 new_asid, old_asid;
     struct hvm_vcpu_asid *p_asid;
-    bool_t need_flush;
+    uint8_t flush_flags;
 
     ASSERT(hvmemul_cache_disabled(curr));
 
@@ -4685,7 +4685,7 @@ bool vmx_vmenter_helper(const struct cpu_user_regs *regs)
         p_asid = &curr->arch.hvm.n1asid;
 
     old_asid = p_asid->asid;
-    need_flush = hvm_asid_handle_vmenter(p_asid);
+    flush_flags = hvm_asid_handle_vmenter(curr);
     new_asid = p_asid->asid;
 
     if ( unlikely(new_asid != old_asid) )
@@ -4707,8 +4707,13 @@ bool vmx_vmenter_helper(const struct cpu_user_regs *regs)
         }
     }
 
-    if ( unlikely(need_flush) )
+    switch ( flush_flags )
+    {
+    case HVM_ENTRY_TLB_FLUSH_ASID:
+        vpid_sync_vcpu_gva(curr, 0);
+    case HVM_ENTRY_TLB_FLUSH_ALL:
         vpid_sync_all();
+    }
 
     if ( paging_mode_hap(curr->domain) )
     {

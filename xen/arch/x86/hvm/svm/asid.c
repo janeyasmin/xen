@@ -42,7 +42,7 @@ void svm_asid_handle_vmrun(void)
     struct hvm_vcpu_asid *p_asid =
         nestedhvm_vcpu_in_guestmode(curr)
         ? &vcpu_nestedhvm(curr).nv_n2asid : &curr->arch.hvm.n1asid;
-    bool need_flush = hvm_asid_handle_vmenter(p_asid);
+    uint8_t flush_flags = hvm_asid_handle_vmenter(curr);
 
     /* ASID 0 indicates that ASIDs are disabled. */
     if ( p_asid->asid == 0 )
@@ -56,9 +56,22 @@ void svm_asid_handle_vmrun(void)
     if ( vmcb_get_guest_asid(vmcb) != p_asid->asid )
         vmcb_set_guest_asid(vmcb, p_asid->asid);
 
-    vmcb->tlb_control =
-        !need_flush ? TLB_CTRL_NO_FLUSH :
-        cpu_has_svm_flushbyasid ? TLB_CTRL_FLUSH_ASID : TLB_CTRL_FLUSH_ALL;
+    switch ( flush_flags )
+    {
+    case HVM_ENTRY_TLB_NO_FLUSH:
+        vmcb->tlb_control = TLB_CTRL_NO_FLUSH;
+    case HVM_ENTRY_TLB_FLUSH_ASID:
+        if ( cpu_has_svm_flushbyasid )
+        {
+            vmcb->tlb_control = TLB_CTRL_FLUSH_ASID;
+            return;
+        }
+        /* fall through */
+    case HVM_ENTRY_TLB_FLUSH_ALL:
+        vmcb->tlb_control = TLB_CTRL_FLUSH_ALL;
+        break;
+    }
+
 }
 
 /*

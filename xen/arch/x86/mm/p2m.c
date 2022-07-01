@@ -1578,7 +1578,7 @@ void np2m_schedule(int dir)
             if ( !np2m_valid )
             {
                 /* This vCPU's np2m was flushed while it was not runnable */
-                hvm_asid_flush_core();
+                hvm_asid_flush_tlb_all();
                 vcpu_nestedhvm(curr).nv_p2m = NULL;
             }
             else
