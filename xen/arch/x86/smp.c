@@ -22,6 +22,7 @@
 #include <asm/hardirq.h>
 #include <asm/hpet.h>
 #include <asm/hvm/support.h>
+#include <asm/invlpgb.h>
 #include <asm/setup.h>
 #include <irq_vectors.h>
 #include <mach_apic.h>
@@ -277,6 +278,7 @@ void flush_area_mask(const cpumask_t *mask, const void *va, unsigned int flags)
 	unsigned long addr = (unsigned long)va;
 	if ( cpu_has_tlb_invlpgb_sync ) // && ANOTHER CHECK
 	{
+	    //invlpgb_addr(addr);
 	    invlpgb_mask(mask, addr);
 	    return;
 	}

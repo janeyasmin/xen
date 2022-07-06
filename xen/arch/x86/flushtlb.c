@@ -36,7 +36,7 @@ u32 tlbflush_clock = 1U;
 DEFINE_PER_CPU(u32, tlbflush_time);
 
 /* Signals whether the TLB flush clock is in use. */
-bool __read_mostly tlb_clk_enabled = true;
+bool __read_mostly tlb_clk_enabled = false;
 
 typedef struct { DECLARE_BITMAP(bits, 16); } flush_asidmask_t;
 

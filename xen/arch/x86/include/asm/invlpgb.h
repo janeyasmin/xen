@@ -46,6 +46,14 @@ static inline void invlpgb(unsigned long linear, uint32_t asid,
 	uint64_t raw;
     } edx = { .asid = asid, .pcid = pcid};
 
+    union {
+	struct {
+	    uint16_t count     :16;
+	    uint16_t fill      :15;
+	    bool_t size        :1;
+	};
+    } ecx = { .count = 0 }; //cpuid_edx(0x80000008) & 0x10 };
+
     asm volatile(
 #ifdef HAVE_AS_INVLPGB
 	"invlpgb"
@@ -53,7 +61,7 @@ static inline void invlpgb(unsigned long linear, uint32_t asid,
 	".byte 0x0f, 0x01, 0x0fe"
 #endif
 	: /* output */
-	: "a" (rax), "d" (edx) /* input */
+	: "a" (rax), "d" (edx), "c" (ecx) /* input */
 	);
     tlb_sync();
 }
