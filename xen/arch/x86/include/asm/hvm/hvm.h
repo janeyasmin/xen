@@ -98,8 +98,8 @@ struct hvm_vcpu_nonreg_state {
 /* These happen to be the same as the SVM TLB control function definitions.*/
 #define HVM_ENTRY_TLB_NO_FLUSH             0x00000000
 #define HVM_ENTRY_TLB_FLUSH_ALL            0x00000001
-#define HVM_ENTRY_TLB_FLUSH_ASID           0x00000002
-#define HVM_ENTRY_TLB_FLUSH_ASID_NONGLOBAL 0x00000003
+#define HVM_ENTRY_TLB_FLUSH_ASID           0x00000003
+#define HVM_ENTRY_TLB_FLUSH_ASID_NONGLOBAL 0x00000007
 
 /*
  * The hardware virtual machine (HVM) interface abstracts away from the

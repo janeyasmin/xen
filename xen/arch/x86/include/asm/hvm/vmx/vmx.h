@@ -557,6 +557,11 @@ execute_invvpid:
     __invvpid(type, v->arch.hvm.n1asid.asid, (u64)gva);
 }
 
+static inline void vpid_sync_vcpu_nonglobal(struct vcpu *v)
+{
+    __invvpid(INVVPID_SINGLE_CONTEXT_RETAINING_GLOBAL,
+	      v->arch.hvm.n1asid.asid);
+
 static inline void vpid_sync_all(void)
 {
     __invvpid(INVVPID_ALL_CONTEXT, 0, 0);

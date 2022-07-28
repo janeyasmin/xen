@@ -308,17 +308,6 @@ enum VMEXIT_EXITCODE
     VMEXIT_INVALID          =  -1
 };
 
-enum
-{
-    /* Available on all SVM-capable hardware. */
-    TLB_CTRL_NO_FLUSH             = 0,
-    TLB_CTRL_FLUSH_ALL            = 1,
-
-    /* Available with the FlushByASID feature. */
-    TLB_CTRL_FLUSH_ASID           = 3,
-    TLB_CTRL_FLUSH_ASID_NONGLOBAL = 7,
-};
-
 typedef union
 {
     struct

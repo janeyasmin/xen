@@ -56,20 +56,6 @@ void svm_asid_handle_vmrun(void)
     if ( vmcb_get_guest_asid(vmcb) != p_asid->asid )
         vmcb_set_guest_asid(vmcb, p_asid->asid);
 
-    switch ( flush_flags )
-    {
-    case HVM_ENTRY_TLB_NO_FLUSH:
-        vmcb->tlb_control = TLB_CTRL_NO_FLUSH;
-    case HVM_ENTRY_TLB_FLUSH_ASID:
-        if ( cpu_has_svm_flushbyasid )
-        {
-            vmcb->tlb_control = TLB_CTRL_FLUSH_ASID;
-            return;
-        }
-        /* fall through */
-    case HVM_ENTRY_TLB_FLUSH_ALL:
-        vmcb->tlb_control = TLB_CTRL_FLUSH_ALL;
-        break;
     }
 
 }

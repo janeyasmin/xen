@@ -4709,6 +4709,8 @@ bool vmx_vmenter_helper(const struct cpu_user_regs *regs)
 
     switch ( flush_flags )
     {
+    case HVM_ENTRY_TLB_FLUSH_ASID_NONGLOBAL:
+        vpid_sync_vcpu_nonglobal(curr, 0);
     case HVM_ENTRY_TLB_FLUSH_ASID:
         vpid_sync_vcpu_gva(curr, 0);
     case HVM_ENTRY_TLB_FLUSH_ALL:
