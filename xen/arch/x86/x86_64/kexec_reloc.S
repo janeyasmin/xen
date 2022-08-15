@@ -14,6 +14,7 @@
         .file __FILE__
 
 #include <xen/kimage.h>
+#include <xen/linkage.h>
 
 #include <asm/asm_defns.h>
 #include <asm/msr-index.h>
@@ -24,7 +25,7 @@
         .align PAGE_SIZE
         .code64
 
-ENTRY(kexec_reloc)
+SYM_FUNC_START(kexec_reloc)
         /* %rdi - code page maddr */
         /* %rsi - page table maddr */
         /* %rdx - indirection page maddr */
@@ -92,8 +93,9 @@ ENTRY(kexec_reloc)
 
         /* Enter compatibility mode. */
         ljmp    *compatibility_mode_far(%rip)
+SYM_FUNC_END(kexec_reloc)
 
-relocate_pages:
+SYM_FUNC_START_LOCAL(relocate_pages)
         /* %rdi - indirection page maddr */
         pushq   %rbx
 
@@ -141,8 +143,9 @@ relocate_pages:
         ret
 
         .code32
+SYM_FUNC_END(relocate_pages)
 
-compatibility_mode:
+SYM_FUNC_START_LOCAL(compatibility_mode)
         /* Setup some sane segments. */
         movl    $0x0008, %eax
         movl    %eax, %ds
@@ -169,46 +172,34 @@ compatibility_mode:
         /* Call the image entry point.  This should never return. */
         call    *%ebp
         ud2
+SYM_FUNC_END(compatibility_mode)
 
-        .align 4
-compatibility_mode_far:
+SYM_DATA_START_LOCAL(compatibility_mode_far)
         .long 0x00000000             /* set in call_32_bit above */
         .word 0x0010
+SYM_DATA_END(compatibility_mode_far)
 
-        .type compatibility_mode_far, @object
-        .size compatibility_mode_far, . - compatibility_mode_far
-
-compat_mode_gdt_desc:
+SYM_DATA_START_LOCAL(compat_mode_gdt_desc)
         .word .Lcompat_mode_gdt_end - compat_mode_gdt -1
         .quad 0x0000000000000000     /* set in call_32_bit above */
+SYM_DATA_END(compat_mode_gdt_desc)
 
-        .type compat_mode_gdt_desc, @object
-        .size compat_mode_gdt_desc, . - compat_mode_gdt_desc
-
-        .align 8
-compat_mode_gdt:
+SYM_DATA_START_LOCAL(compat_mode_gdt)
         .quad 0x0000000000000000     /* null                              */
         .quad 0x00cf93000000ffff     /* 0x0008 ring 0 data                */
         .quad 0x00cf9b000000ffff     /* 0x0010 ring 0 code, compatibility */
 .Lcompat_mode_gdt_end:
+SYM_DATA_END(compat_mode_gdt)
 
-        .type compat_mode_gdt, @object
-        .size compat_mode_gdt, . - compat_mode_gdt
-
-compat_mode_idt:
+SYM_DATA_START_LOCAL(compat_mode_idt)
         .word 0                      /* limit */
         .long 0                      /* base */
-
-        .type compat_mode_idt, @object
-        .size compat_mode_idt, . - compat_mode_idt
+SYM_DATA_END(compat_mode_idt)
 
         /*
          * 16 words of stack are more than enough.
          */
-        .align 8
-reloc_stack:
+SYM_DATA_START_LOCAL(reloc_stack)
         .fill 16,8,0
 .Lreloc_stack_base:
-
-        .type reloc_stack, @object
-        .size reloc_stack, . - reloc_stack
+SYM_DATA_END(reloc_stack)
