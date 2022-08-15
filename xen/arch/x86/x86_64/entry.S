@@ -11,6 +11,7 @@
 #include <asm/processor.h>
 #include <public/xen.h>
 #include <irq_vectors.h>
+#include <xen/linkage.h>
 
 /* %rsp: struct cpu_user_regs */
 .macro ASSERT_CONTEXT_IS_XEN
@@ -152,7 +153,7 @@ ENTRY(early_page_fault)
         .section .text.entry, "ax", @progbits
 
 /* %rbx: struct vcpu, interrupts disabled */
-restore_all_guest:
+SYM_CODE_START_LOCAL(restore_all_guest)
         ASSERT_INTERRUPTS_DISABLED
 
         /* Stash guest SPEC_CTRL value while we can read struct vcpu. */
@@ -233,12 +234,13 @@ restore_all_guest:
 .Lrestore_rcx_iret_exit_to_guest:
         movq  8(%rsp), %rcx           # RIP
 /* No special register assumptions. */
-iret_exit_to_guest:
+SYM_INNER_LABEL_LOCAL(iret_exit_to_guest)
         andl  $~(X86_EFLAGS_IOPL | X86_EFLAGS_VM), 24(%rsp)
         orl   $X86_EFLAGS_IF,24(%rsp)
         addq  $8,%rsp
 .Lft0:  iretq
         _ASM_PRE_EXTABLE(.Lft0, handle_exception)
+SYM_CODE_END(restore_all_guest)
 
 /*
  * When entering SYSCALL from kernel mode:
@@ -255,7 +257,7 @@ iret_exit_to_guest:
  *  - Guest %rsp stored in %rax
  *  - Xen stack loaded, pointing at the %ss slot
  */
-ENTRY(lstar_enter)
+SYM_CODE_START(lstar_enter)
 #ifdef CONFIG_XEN_SHSTK
         ALTERNATIVE "", "setssbsy", X86_FEATURE_XEN_SHSTK
 #endif
@@ -290,9 +292,10 @@ ENTRY(lstar_enter)
         mov   %rsp, %rdi
         call  pv_hypercall
         jmp   test_all_events
+SYM_CODE_END(lstar_enter)
 
 /* See lstar_enter for entry register state. */
-ENTRY(cstar_enter)
+SYM_CODE_START(cstar_enter)
 #ifdef CONFIG_XEN_SHSTK
         ALTERNATIVE "", "setssbsy", X86_FEATURE_XEN_SHSTK
 #endif
@@ -329,8 +332,9 @@ ENTRY(cstar_enter)
         jne   compat_syscall
 #endif
         jmp   switch_to_kernel
+SYM_CODE_END(cstar_enter)
 
-ENTRY(sysenter_entry)
+SYM_CODE_START(sysenter_entry)
         ENDBR64
 #ifdef CONFIG_XEN_SHSTK
         ALTERNATIVE "", "setssbsy", X86_FEATURE_XEN_SHSTK
@@ -339,7 +343,7 @@ ENTRY(sysenter_entry)
         pushq $FLAT_USER_SS
         pushq $0
         pushfq
-GLOBAL(sysenter_eflags_saved)
+SYM_INNER_LABEL_GLOBAL(sysenter_eflags_saved)
         ALTERNATIVE "", clac, X86_FEATURE_XEN_SMAP
         pushq $3 /* ring 3 null cs */
         pushq $0 /* null rip */
@@ -393,8 +397,9 @@ UNLIKELY_END(sysenter_gpf)
         jne   compat_sysenter
 #endif
         jmp   .Lbounce_exception
+SYM_CODE_END(sysenter_entry)
 
-ENTRY(int80_direct_trap)
+SYM_CODE_START(int80_direct_trap)
         ENDBR64
         ALTERNATIVE "", clac, X86_FEATURE_XEN_SMAP
         pushq $0
@@ -465,8 +470,9 @@ UNLIKELY_END(msi_check)
 
         call  create_bounce_frame
         jmp   test_all_events
+SYM_CODE_END(int80_direct_trap)
 
-int80_slow_path:
+SYM_CODE_START_LOCAL(int80_slow_path)
         /* 
          * Setup entry vector and error code as if this was a GPF caused by an
          * IDT entry with DPL==0.
@@ -482,6 +488,7 @@ int80_slow_path:
          */
         GET_STACK_END(14)
         jmp   handle_exception_saved
+SYM_CODE_END(int80_slow_path)
 
         /* create_bounce_frame & helpers don't need to be in .text.entry */
         .text
@@ -657,9 +664,8 @@ ret_from_intr:
 
         .section .text.entry, "ax", @progbits
 
-        ALIGN
 /* No special register assumptions. */
-restore_all_xen:
+SYM_CODE_START_LOCAL(restore_all_xen)
         /*
          * Check whether we need to switch to the per-CPU page tables, in
          * case we return to late PV exit code (from an NMI or #MC).
@@ -676,8 +682,9 @@ UNLIKELY_END(exit_cr3)
 
         RESTORE_ALL adj=8
         iretq
+SYM_CODE_END(restore_all_xen)
 
-ENTRY(common_interrupt)
+SYM_CODE_START(common_interrupt)
         ALTERNATIVE "", clac, X86_FEATURE_XEN_SMAP
         SAVE_ALL
 
@@ -706,12 +713,15 @@ ENTRY(common_interrupt)
         mov   %r15, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
         mov   %bl, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
         jmp ret_from_intr
+SYM_CODE_END(common_interrupt)
 
-ENTRY(page_fault)
+SYM_CODE_START(page_fault)
         ENDBR64
-        movl  $TRAP_page_fault,4(%rsp)
+        movl  $TRAP_page_fault, 4(%rsp)
+SYM_CODE_END(page_fault)
+
+SYM_CODE_START(handle_exception)
 /* No special register assumptions. */
-GLOBAL(handle_exception)
         ALTERNATIVE "", clac, X86_FEATURE_XEN_SMAP
         SAVE_ALL
 
@@ -734,7 +744,7 @@ GLOBAL(handle_exception)
         cmovnz %r12d, %r13d
 .Lxcpt_cr3_okay:
 
-handle_exception_saved:
+SYM_INNER_LABEL_LOCAL(handle_exception_saved)
         GET_CURRENT(bx)
         testb $X86_EFLAGS_IF>>8,UREGS_eflags+1(%rsp)
         jz    exception_with_ints_disabled
@@ -842,9 +852,10 @@ handle_exception_saved:
         ASSERT_CONTEXT_IS_XEN
         jmp   restore_all_xen
 #endif
+SYM_CODE_END(handle_exception)
 
 /* No special register assumptions. */
-exception_with_ints_disabled:
+SYM_CODE_START_LOCAL(exception_with_ints_disabled)
         testb $3,UREGS_cs(%rsp)         # interrupts disabled outside Xen?
         jnz   FATAL_exception_with_ints_disabled
         movq  %rsp,%rdi
@@ -874,99 +885,116 @@ exception_with_ints_disabled:
         mov   %r15, STACK_CPUINFO_FIELD(xen_cr3)(%r14)
         mov   %r13b, STACK_CPUINFO_FIELD(use_pv_cr3)(%r14)
         jmp   restore_all_xen           # return to fixup code
+SYM_CODE_END(exception_with_ints_disabled)
 
 /* No special register assumptions. */
-FATAL_exception_with_ints_disabled:
+SYM_CODE_START_LOCAL(FATAL_exception_with_ints_disabled)
         xorl  %esi,%esi
         movq  %rsp,%rdi
         call  fatal_trap
         BUG   /* fatal_trap() shouldn't return. */
+SYM_CODE_END(FATAL_exception_with_ints_disabled)
 
-ENTRY(divide_error)
+SYM_CODE_START(divide_error)
         ENDBR64
         pushq $0
         movl  $TRAP_divide_error,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(divide_error)
 
-ENTRY(coprocessor_error)
+SYM_CODE_START(coprocessor_error)
         ENDBR64
         pushq $0
         movl  $TRAP_copro_error,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(coprocessor_error)
 
-ENTRY(simd_coprocessor_error)
+SYM_CODE_START(simd_coprocessor_error)
         ENDBR64
         pushq $0
         movl  $TRAP_simd_error,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(simd_coprocessor_error)
 
-ENTRY(device_not_available)
+SYM_CODE_START(device_not_available)
         ENDBR64
         pushq $0
         movl  $TRAP_no_device,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(device_not_available)
 
-ENTRY(debug)
+SYM_CODE_START(debug)
         ENDBR64
         pushq $0
         movl  $TRAP_debug,4(%rsp)
         jmp   handle_ist_exception
+SYM_CODE_END(debug)
 
-ENTRY(int3)
+SYM_CODE_START(int3)
         ENDBR64
         pushq $0
         movl  $TRAP_int3,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(int3)
 
-ENTRY(overflow)
+SYM_CODE_START(overflow)
         ENDBR64
         pushq $0
         movl  $TRAP_overflow,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(overflow)
 
-ENTRY(bounds)
+SYM_CODE_START(bounds)
         ENDBR64
         pushq $0
         movl  $TRAP_bounds,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(bounds)
 
-ENTRY(invalid_op)
+SYM_CODE_START(invalid_op)
         ENDBR64
         pushq $0
         movl  $TRAP_invalid_op,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(invalid_op)
 
-ENTRY(invalid_TSS)
+SYM_CODE_START(invalid_TSS)
         ENDBR64
         movl  $TRAP_invalid_tss,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(invalid_TSS)
 
-ENTRY(segment_not_present)
+SYM_CODE_START(segment_not_present)
         ENDBR64
         movl  $TRAP_no_segment,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(segment_not_present)
 
-ENTRY(stack_segment)
+SYM_CODE_START(stack_segment)
         ENDBR64
         movl  $TRAP_stack_error,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(stack_segment)
 
-ENTRY(general_protection)
+SYM_CODE_START(general_protection)
         ENDBR64
         movl  $TRAP_gp_fault,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(general_protection)
 
-ENTRY(alignment_check)
+SYM_CODE_START(alignment_check)
         ENDBR64
         movl  $TRAP_alignment_check,4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(alignment_check)
 
-ENTRY(entry_CP)
+SYM_CODE_START(entry_CP)
         ENDBR64
         movl  $X86_EXC_CP, 4(%rsp)
         jmp   handle_exception
+SYM_CODE_END(entry_CP)
 
-ENTRY(double_fault)
+SYM_CODE_START(double_fault)
         ENDBR64
         movl  $TRAP_double_fault,4(%rsp)
         /* Set AC to reduce chance of further SMAP faults */
@@ -990,12 +1018,15 @@ ENTRY(double_fault)
         movq  %rsp,%rdi
         call  do_double_fault
         BUG   /* do_double_fault() shouldn't return. */
+SYM_CODE_END(double_fault)
 
-ENTRY(nmi)
+SYM_CODE_START(nmi)
         ENDBR64
         pushq $0
-        movl  $TRAP_nmi,4(%rsp)
-handle_ist_exception:
+        movl  $TRAP_nmi, 4(%rsp)
+SYM_CODE_END(nmi)
+
+SYM_CODE_START(handle_ist_exception)
         ALTERNATIVE "", clac, X86_FEATURE_XEN_SMAP
         SAVE_ALL
 
@@ -1025,9 +1056,9 @@ handle_ist_exception:
          */
         xor   %r15, %r15
         xor   %ebx, %ebx
-        GET_CPUINFO_FIELD(guest_cpu_user_regs,di)
+        GET_CPUINFO_FIELD(guest_cpu_user_regs, di)
         movq  %rsp,%rsi
-        movl  $UREGS_kernel_sizeof/8,%ecx
+        movl  $UREGS_kernel_sizeof/8, %ecx
         movq  %rdi,%rsp
         rep   movsq
 
@@ -1119,17 +1150,20 @@ handle_ist_exception:
         ASSERT_CONTEXT_IS_XEN
         jmp   restore_all_xen
 #endif
+SYM_CODE_END(handle_ist_exception)
 
-ENTRY(machine_check)
+SYM_CODE_START(machine_check)
         ENDBR64
         pushq $0
         movl  $TRAP_machine_check,4(%rsp)
         jmp   handle_ist_exception
+SYM_CODE_END(machine_check)
 
 /* No op trap handler.  Required for kexec crash path. */
-GLOBAL(trap_nop)
+SYM_CODE_START_NOALIGN(trap_nop)
         ENDBR64
         iretq
+SYM_CODE_END(trap_nop)
 
 /* Table of automatically generated entry points.  One per vector. */
         .pushsection .init.rodata, "a", @progbits
@@ -1142,7 +1176,8 @@ GLOBAL(autogen_entrypoints)
         .endm
 
         .popsection
-autogen_stubs: /* Automatically generated stubs. */
+/* Automatically generated stubs. */
+SYM_CODE_START_LOCAL(autogen_stubs)
 
         vec = 0
         .rept X86_NR_VECTORS
@@ -1186,6 +1221,7 @@ autogen_stubs: /* Automatically generated stubs. */
 
         vec = vec + 1
         .endr
+SYM_CODE_END(autogen_stubs)
 
         .section .init.rodata, "a", @progbits
         .size autogen_entrypoints, . - autogen_entrypoints
