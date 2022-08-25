@@ -124,13 +124,15 @@ void arch_iommu_check_autotranslated_hwdom(struct domain *d);
 void arch_iommu_hwdom_init(struct domain *d);
 
 /*
- * The following flags are passed to map operations and passed by lookup
- * operations.
+ * The following flags are passed to map (applicable ones also to unmap)
+ * operations, while some are passed back by lookup operations.
  */
-#define _IOMMUF_readable 0
+#define IOMMUF_order(n)  ((n) & 0x3f)
+#define _IOMMUF_readable 6
 #define IOMMUF_readable  (1u<<_IOMMUF_readable)
-#define _IOMMUF_writable 1
+#define _IOMMUF_writable 7
 #define IOMMUF_writable  (1u<<_IOMMUF_writable)
+#define IOMMUF_preempt   (1u << 8)
 
 /*
  * flush_flags:
@@ -146,16 +148,24 @@ enum
 {
     _IOMMU_FLUSHF_added,
     _IOMMU_FLUSHF_modified,
+    _IOMMU_FLUSHF_all,
 };
 #define IOMMU_FLUSHF_added (1u << _IOMMU_FLUSHF_added)
 #define IOMMU_FLUSHF_modified (1u << _IOMMU_FLUSHF_modified)
+#define IOMMU_FLUSHF_all (1u << _IOMMU_FLUSHF_all)
 
-int __must_check iommu_map(struct domain *d, dfn_t dfn, mfn_t mfn,
-                           unsigned long page_count, unsigned int flags,
-                           unsigned int *flush_flags);
-int __must_check iommu_unmap(struct domain *d, dfn_t dfn,
-                             unsigned long page_count,
-                             unsigned int *flush_flags);
+/*
+ * For both of these: Negative return values are error indicators. Zero
+ * indicates full successful completion of the request, while positive
+ * values indicate partial completion, which is possible only with
+ * IOMMUF_preempt passed in.
+ */
+long __must_check iommu_map(struct domain *d, dfn_t dfn, mfn_t mfn,
+                            unsigned long page_count, unsigned int flags,
+                            unsigned int *flush_flags);
+long __must_check iommu_unmap(struct domain *d, dfn_t dfn,
+                              unsigned long page_count, unsigned int flags,
+                              unsigned int *flush_flags);
 
 int __must_check iommu_legacy_map(struct domain *d, dfn_t dfn, mfn_t mfn,
                                   unsigned long page_count,
@@ -255,6 +265,7 @@ struct iommu_ops {
                                  unsigned int flags,
                                  unsigned int *flush_flags);
     int __must_check (*unmap_page)(struct domain *d, dfn_t dfn,
+                                   unsigned int order,
                                    unsigned int *flush_flags);
     int __must_check (*lookup_page)(struct domain *d, dfn_t dfn, mfn_t *mfn,
                                     unsigned int *flags);
@@ -279,7 +290,6 @@ struct iommu_ops {
     int __must_check (*iotlb_flush)(struct domain *d, dfn_t dfn,
                                     unsigned long page_count,
                                     unsigned int flush_flags);
-    int __must_check (*iotlb_flush_all)(struct domain *d);
     int (*get_reserved_device_memory)(iommu_grdm_t *, void *);
     void (*dump_page_tables)(struct domain *d);
 

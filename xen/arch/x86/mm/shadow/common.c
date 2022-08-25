@@ -389,7 +389,7 @@ static int oos_remove_write_access(struct vcpu *v, mfn_t gmfn,
          * the page.  If that doesn't work either, the guest is granting
          * his pagetables and must be killed after all.
          * This will flush the tlb, so we can return with no worries. */
-        sh_remove_shadows(d, gmfn, 0 /* Be thorough */, 1 /* Must succeed */);
+        shadow_remove_all_shadows(d, gmfn);
         return 1;
     }
 
@@ -1581,7 +1581,7 @@ void shadow_hash_insert(struct domain *d, unsigned long n, unsigned int t,
     sh_hash_audit_bucket(d, key);
 }
 
-void shadow_hash_delete(struct domain *d, unsigned long n, unsigned int t,
+bool shadow_hash_delete(struct domain *d, unsigned long n, unsigned int t,
                         mfn_t smfn)
 /* Excise the mapping (n,t)->smfn from the hash table */
 {
@@ -1606,10 +1606,8 @@ void shadow_hash_delete(struct domain *d, unsigned long n, unsigned int t,
     {
         /* Need to search for the one we want */
         x = d->arch.paging.shadow.hash_table[key];
-        while ( 1 )
+        while ( x )
         {
-            ASSERT(x); /* We can't have hit the end, since our target is
-                        * still in the chain somehwere... */
             if ( next_shadow(x) == sp )
             {
                 x->next_shadow = sp->next_shadow;
@@ -1617,10 +1615,14 @@ void shadow_hash_delete(struct domain *d, unsigned long n, unsigned int t,
             }
             x = next_shadow(x);
         }
+        if ( !x )
+            return false;
     }
     set_next_shadow(sp, NULL);
 
     sh_hash_audit_bucket(d, key);
+
+    return true;
 }
 
 typedef int (*hash_vcpu_callback_t)(struct vcpu *v, mfn_t smfn, mfn_t other_mfn);
@@ -2238,10 +2240,12 @@ void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all)
     }                                                                   \
 } while (0)
 
+#ifdef CONFIG_HVM
     DO_UNSHADOW(SH_type_l2_32_shadow);
     DO_UNSHADOW(SH_type_l1_32_shadow);
     DO_UNSHADOW(SH_type_l2_pae_shadow);
     DO_UNSHADOW(SH_type_l1_pae_shadow);
+#endif
     DO_UNSHADOW(SH_type_l4_64_shadow);
     DO_UNSHADOW(SH_type_l3_64_shadow);
     DO_UNSHADOW(SH_type_l2h_64_shadow);
@@ -2265,8 +2269,8 @@ void sh_remove_shadows(struct domain *d, mfn_t gmfn, int fast, int all)
     paging_unlock(d);
 }
 
-void shadow_prepare_page_type_change(struct domain *d, struct page_info *page,
-                                     unsigned long new_type)
+void shadow_prepare_page_type_change(struct domain *d,
+                                     const struct page_info *page)
 {
     if ( !(page->count_info & PGC_page_table) )
         return;
@@ -2278,7 +2282,7 @@ void shadow_prepare_page_type_change(struct domain *d, struct page_info *page,
      * pages are allowed to become writeable.
      */
     if ( (page->shadow_flags & SHF_oos_may_write) &&
-         new_type == PGT_writable_page )
+         (page->u.inuse.type_info & PGT_type_mask) == PGT_writable_page )
         return;
 #endif
 

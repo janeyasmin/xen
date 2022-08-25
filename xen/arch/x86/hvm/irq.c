@@ -325,7 +325,7 @@ void hvm_assert_evtchn_irq(struct vcpu *v)
 
         vlapic_set_irq(vcpu_vlapic(v), vector, 0);
     }
-    else if ( is_hvm_pv_evtchn_vcpu(v) )
+    else if ( is_hvm_pv_evtchn_domain(v->domain) )
         vcpu_kick(v);
     else if ( v->vcpu_id == 0 )
         hvm_set_callback_irq_level(v);
@@ -404,9 +404,9 @@ int hvm_inject_msi(struct domain *d, uint64_t addr, uint32_t data)
             {
                 int rc;
 
-                spin_lock(&d->event_lock);
+                write_lock(&d->event_lock);
                 rc = map_domain_emuirq_pirq(d, pirq, IRQ_MSI_EMU);
-                spin_unlock(&d->event_lock);
+                write_unlock(&d->event_lock);
                 if ( rc )
                     return rc;
                 info = pirq_info(d, pirq);

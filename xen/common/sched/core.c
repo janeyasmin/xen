@@ -571,12 +571,46 @@ int sched_init_vcpu(struct vcpu *v)
         return 1;
     }
 
-    /*
-     * Initialize affinity settings. The idler, and potentially
-     * domain-0 VCPUs, are pinned onto their respective physical CPUs.
-     */
-    if ( is_idle_domain(d) || (is_hardware_domain(d) && opt_dom0_vcpus_pin) )
+    if ( is_idle_domain(d) )
+    {
+        /* Idle vCPUs are always pinned onto their respective pCPUs */
         sched_set_affinity(unit, cpumask_of(processor), &cpumask_all);
+    }
+    else if ( pv_shim && v->vcpu_id == 0 )
+    {
+        /*
+         * PV-shim: vcpus are pinned 1:1. Initially only 1 cpu is online,
+         * others will be dealt with when onlining them. This avoids pinning
+         * a vcpu to a not yet online cpu here.
+         */
+        sched_set_affinity(unit, cpumask_of(0), cpumask_of(0));
+    }
+    else if ( d->domain_id == 0 && opt_dom0_vcpus_pin )
+    {
+        /*
+         * If dom0_vcpus_pin is specified, dom0 vCPUs are pinned 1:1 to
+         * their respective pCPUs too.
+         */
+        sched_set_affinity(unit, cpumask_of(processor), &cpumask_all);
+    }
+#ifdef CONFIG_X86
+    else if ( d->domain_id == 0 )
+    {
+        /*
+         * In absence of dom0_vcpus_pin instead, the hard and soft affinity of
+         * dom0 is controlled by the (x86 only) dom0_nodes parameter. At this
+         * point it has been parsed and decoded into the dom0_cpus mask.
+         *
+         * Note that we always honor what user explicitly requested, for both
+         * hard and soft affinity, without doing any dynamic computation of
+         * either of them.
+         */
+        if ( !dom0_affinity_relaxed )
+            sched_set_affinity(unit, &dom0_cpus, &cpumask_all);
+        else
+            sched_set_affinity(unit, &cpumask_all, &dom0_cpus);
+    }
+#endif
     else
         sched_set_affinity(unit, &cpumask_all, &cpumask_all);
 
@@ -1862,7 +1896,7 @@ typedef long ret_t;
 
 #endif /* !COMPAT */
 
-ret_t cf_check do_sched_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+ret_t do_sched_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     ret_t ret = 0;
 
@@ -1999,7 +2033,7 @@ ret_t cf_check do_sched_op(int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 #ifndef COMPAT
 
 /* Per-vcpu oneshot-timer hypercall. */
-long cf_check do_set_timer_op(s_time_t timeout)
+long do_set_timer_op(s_time_t timeout)
 {
     struct vcpu *v = current;
     s_time_t offset = timeout - NOW();
@@ -3033,7 +3067,12 @@ void __init scheduler_init(void)
         sched_ratelimit_us = SCHED_DEFAULT_RATELIMIT_US;
     }
 
-    idle_domain = domain_create(DOMID_IDLE, NULL, 0);
+    /*
+     * The idle dom is created privileged to ensure unrestricted access during
+     * setup and will be demoted by xsm_set_system_active() when setup is
+     * complete.
+     */
+    idle_domain = domain_create(DOMID_IDLE, NULL, CDF_privileged);
     BUG_ON(IS_ERR(idle_domain));
     BUG_ON(nr_cpu_ids > ARRAY_SIZE(idle_vcpu));
     idle_domain->vcpu = idle_vcpu;
@@ -3397,28 +3436,9 @@ void wait(void)
 void __init sched_setup_dom0_vcpus(struct domain *d)
 {
     unsigned int i;
-    struct sched_unit *unit;
 
     for ( i = 1; i < d->max_vcpus; i++ )
         vcpu_create(d, i);
-
-    /*
-     * PV-shim: vcpus are pinned 1:1.
-     * Initially only 1 cpu is online, others will be dealt with when
-     * onlining them. This avoids pinning a vcpu to a not yet online cpu here.
-     */
-    if ( pv_shim )
-        sched_set_affinity(d->vcpu[0]->sched_unit,
-                           cpumask_of(0), cpumask_of(0));
-    else
-    {
-        for_each_sched_unit ( d, unit )
-        {
-            if ( !opt_dom0_vcpus_pin && !dom0_affinity_relaxed )
-                sched_set_affinity(unit, &dom0_cpus, NULL);
-            sched_set_affinity(unit, NULL, &dom0_cpus);
-        }
-    }
 
     domain_update_node_affinity(d);
 }

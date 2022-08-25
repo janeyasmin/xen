@@ -69,6 +69,8 @@
  * [3:4] Permission flags
  * [5]   Page present
  * [6]   Only populate page tables
+ * [7]   Superpage mappings is allowed
+ * [8]   Set contiguous bit (internal flag)
  */
 #define PAGE_AI_MASK(x) ((x) & 0x7U)
 
@@ -81,6 +83,12 @@
 
 #define _PAGE_PRESENT    (1U << 5)
 #define _PAGE_POPULATE   (1U << 6)
+
+#define _PAGE_BLOCK_BIT     7
+#define _PAGE_BLOCK         (1U << _PAGE_BLOCK_BIT)
+
+#define _PAGE_CONTIG_BIT    8
+#define _PAGE_CONTIG        (1U << _PAGE_CONTIG_BIT)
 
 /*
  * _PAGE_DEVICE and _PAGE_NORMAL are convenience defines. They are not

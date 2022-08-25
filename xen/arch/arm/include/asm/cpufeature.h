@@ -67,8 +67,9 @@
 #define ARM_WORKAROUND_BHB_LOOP_24 13
 #define ARM_WORKAROUND_BHB_LOOP_32 14
 #define ARM_WORKAROUND_BHB_SMCC_3 15
+#define ARM_HAS_SB 16
 
-#define ARM_NCAPS           16
+#define ARM_NCAPS           17
 
 #ifndef __ASSEMBLY__
 
@@ -77,6 +78,9 @@
 #include <xen/bitops.h>
 
 extern DECLARE_BITMAP(cpu_hwcaps, ARM_NCAPS);
+
+void check_local_cpu_features(void);
+void enable_cpu_features(void);
 
 static inline bool cpus_have_cap(unsigned int num)
 {
@@ -230,6 +234,7 @@ struct cpuinfo_arm {
     union {
         register_t bits[3];
         struct {
+            /* MMFR0 */
             unsigned long pa_range:4;
             unsigned long asid_bits:4;
             unsigned long bigend:4;
@@ -238,18 +243,31 @@ struct cpuinfo_arm {
             unsigned long tgranule_16K:4;
             unsigned long tgranule_64K:4;
             unsigned long tgranule_4K:4;
-            unsigned long __res0:32;
+            unsigned long tgranule_16k_2:4;
+            unsigned long tgranule_64k_2:4;
+            unsigned long tgranule_4k_2:4;
+            unsigned long exs:4;
+            unsigned long __res0:8;
+            unsigned long fgt:4;
+            unsigned long ecv:4;
 
+            /* MMFR1 */
             unsigned long hafdbs:4;
             unsigned long vmid_bits:4;
             unsigned long vh:4;
             unsigned long hpds:4;
             unsigned long lo:4;
             unsigned long pan:4;
-            unsigned long __res1:8;
-            unsigned long __res2:28;
+            unsigned long specsei:4;
+            unsigned long xnx:4;
+            unsigned long twed:4;
+            unsigned long ets:4;
+            unsigned long __res1:4;
+            unsigned long afp:4;
+            unsigned long __res2:12;
             unsigned long ecbhb:4;
 
+            /* MMFR2 */
             unsigned long __res3:64;
         };
     } mm64;
@@ -293,7 +311,11 @@ struct cpuinfo_arm {
             unsigned long __res2:8;
 
             /* ISAR2 */
-            unsigned long __res3:28;
+            unsigned long wfxt:4;
+            unsigned long rpres:4;
+            unsigned long gpa3:4;
+            unsigned long apa3:4;
+            unsigned long __res3:12;
             unsigned long clearbhb:4;
 
             unsigned long __res4:32;

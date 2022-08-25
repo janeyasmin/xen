@@ -173,7 +173,7 @@ static int cf_check flask_domain_alloc_security(struct domain *d)
     switch ( d->domain_id )
     {
     case DOMID_IDLE:
-        dsec->sid = SECINITSID_XEN;
+        dsec->sid = SECINITSID_XENBOOT;
         break;
     case DOMID_XEN:
         dsec->sid = SECINITSID_DOMXEN;
@@ -187,6 +187,35 @@ static int cf_check flask_domain_alloc_security(struct domain *d)
 
     dsec->self_sid = dsec->sid;
     d->ssid = dsec;
+
+    return 0;
+}
+
+static int cf_check flask_set_system_active(void)
+{
+    struct domain_security_struct *dsec;
+    struct domain *d = current->domain;
+
+    dsec = d->ssid;
+
+    ASSERT(d->is_privileged);
+    ASSERT(dsec->sid == SECINITSID_XENBOOT);
+    ASSERT(dsec->self_sid == SECINITSID_XENBOOT);
+
+    if ( d->domain_id != DOMID_IDLE )
+    {
+        printk("%s: should only be called by idle domain\n", __func__);
+        return -EPERM;
+    }
+
+    /*
+     * While is_privileged has no significant meaning under flask, set to false
+     * as is_privileged is not only used for a privilege check but also as a
+     * type of domain check, specifically if the domain is the control domain.
+     */
+    d->is_privileged = false;
+
+    dsec->self_sid = dsec->sid = SECINITSID_XEN;
 
     return 0;
 }
@@ -889,7 +918,7 @@ static int flask_map_domain_msi (
 {
 #ifdef CONFIG_HAS_PCI_MSI
     const struct msi_info *msi = data;
-    uint32_t machine_bdf = (msi->seg << 16) | (msi->bus << 8) | msi->devfn;
+    uint32_t machine_bdf = msi->sbdf.sbdf;
 
     AVC_AUDIT_DATA_INIT(ad, DEV);
     ad->device = machine_bdf;
@@ -1774,6 +1803,7 @@ static int cf_check flask_argo_send(
 #endif
 
 static const struct xsm_ops __initconst_cf_clobber flask_ops = {
+    .set_system_active = flask_set_system_active,
     .security_domaininfo = flask_security_domaininfo,
     .domain_create = flask_domain_create,
     .getdomaininfo = flask_getdomaininfo,

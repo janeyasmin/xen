@@ -25,6 +25,9 @@ config GRANT_TABLE
 config ALTERNATIVE_CALL
 	bool
 
+config ARCH_MAP_DOMAIN_PAGE
+	bool
+
 config HAS_ALTERNATIVE
 	bool
 
@@ -49,6 +52,9 @@ config HAS_KEXEC
 config HAS_PDX
 	bool
 
+config HAS_PMAP
+	bool
+
 config HAS_SCHED_GRANULARITY
 	bool
 
@@ -68,6 +74,9 @@ config MEM_ACCESS
 	  related events in userspace.
 
 config NEEDS_LIBELF
+	bool
+
+config NUMA
 	bool
 
 config STATIC_MEMORY

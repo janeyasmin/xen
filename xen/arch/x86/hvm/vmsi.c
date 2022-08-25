@@ -467,7 +467,7 @@ int msixtbl_pt_register(struct domain *d, struct pirq *pirq, uint64_t gtable)
     int r = -EINVAL;
 
     ASSERT(pcidevs_locked());
-    ASSERT(spin_is_locked(&d->event_lock));
+    ASSERT(rw_is_write_locked(&d->event_lock));
 
     if ( !msixtbl_initialised(d) )
         return -ENODEV;
@@ -537,7 +537,7 @@ void msixtbl_pt_unregister(struct domain *d, struct pirq *pirq)
     struct msixtbl_entry *entry;
 
     ASSERT(pcidevs_locked());
-    ASSERT(spin_is_locked(&d->event_lock));
+    ASSERT(rw_is_write_locked(&d->event_lock));
 
     if ( !msixtbl_initialised(d) )
         return;
@@ -591,13 +591,13 @@ void msixtbl_pt_cleanup(struct domain *d)
     if ( !msixtbl_initialised(d) )
         return;
 
-    spin_lock(&d->event_lock);
+    write_lock(&d->event_lock);
 
     list_for_each_entry_safe( entry, temp,
                               &d->arch.hvm.msixtbl_list, list )
         del_msixtbl_entry(entry);
 
-    spin_unlock(&d->event_lock);
+    write_unlock(&d->event_lock);
 }
 
 void msix_write_completion(struct vcpu *v)
@@ -750,9 +750,7 @@ static int vpci_msi_enable(const struct pci_dev *pdev, unsigned int nr,
                            paddr_t table_base)
 {
     struct msi_info msi_info = {
-        .seg = pdev->seg,
-        .bus = pdev->bus,
-        .devfn = pdev->devfn,
+        .sbdf = pdev->sbdf,
         .table_base = table_base,
         .entry_nr = nr,
     };
@@ -811,9 +809,9 @@ static void vpci_msi_disable(const struct pci_dev *pdev, int pirq,
         ASSERT(!rc);
     }
 
-    spin_lock(&pdev->domain->event_lock);
+    write_lock(&pdev->domain->event_lock);
     unmap_domain_pirq(pdev->domain, pirq);
-    spin_unlock(&pdev->domain->event_lock);
+    write_unlock(&pdev->domain->event_lock);
     pcidevs_unlock();
 }
 

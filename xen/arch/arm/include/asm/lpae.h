@@ -4,6 +4,7 @@
 #ifndef __ASSEMBLY__
 
 #include <xen/page-defs.h>
+#include <xen/mm-frame.h>
 
 /*
  * WARNING!  Unlike the x86 pagetable code, where l1 is the lowest level and
@@ -168,6 +169,13 @@ static inline bool lpae_is_superpage(lpae_t pte, unsigned int level)
         third_table_offset(addr)            \
     }
 
+/*
+ * Standard entry type that we'll use to build Xen's own pagetables.
+ * We put the same permissions at every level, because they're ignored
+ * by the walker in non-leaf entries.
+ */
+lpae_t mfn_to_xen_entry(mfn_t mfn, unsigned int attr);
+
 #endif /* __ASSEMBLY__ */
 
 /*
@@ -252,6 +260,23 @@ static inline bool lpae_is_superpage(lpae_t pte, unsigned int level)
 #define second_table_offset(va) TABLE_OFFSET(second_linear_offset(va))
 #define third_table_offset(va)  TABLE_OFFSET(third_linear_offset(va))
 #define zeroeth_table_offset(va)  TABLE_OFFSET(zeroeth_linear_offset(va))
+
+/*
+ * Macros to define page-tables:
+ *  - DEFINE_BOOT_PAGE_TABLE is used to define page-table that are used
+ *  in assembly code before BSS is zeroed.
+ *  - DEFINE_PAGE_TABLE{,S} are used to define one or multiple
+ *  page-tables to be used after BSS is zeroed (typically they are only used
+ *  in C).
+ */
+#define DEFINE_BOOT_PAGE_TABLE(name)                                          \
+lpae_t __aligned(PAGE_SIZE) __section(".data.page_aligned")                   \
+    name[XEN_PT_LPAE_ENTRIES]
+
+#define DEFINE_PAGE_TABLES(name, nr)                    \
+lpae_t __aligned(PAGE_SIZE) name[XEN_PT_LPAE_ENTRIES * (nr)]
+
+#define DEFINE_PAGE_TABLE(name) DEFINE_PAGE_TABLES(name, 1)
 
 #endif /* __ARM_LPAE_H__ */
 

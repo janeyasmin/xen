@@ -21,6 +21,9 @@
 
 #include "iommu.h"
 
+#define CONTIG_MASK IOMMU_PTE_CONTIG_MASK
+#include <asm/pt-contig-markers.h>
+
 /* Given pfn and page table level, return pde index */
 static unsigned int pfn_to_pde_idx(unsigned long pfn, unsigned int level)
 {
@@ -31,30 +34,33 @@ static unsigned int pfn_to_pde_idx(unsigned long pfn, unsigned int level)
     return idx;
 }
 
-static unsigned int clear_iommu_pte_present(unsigned long l1_mfn,
-                                            unsigned long dfn)
+static union amd_iommu_pte clear_iommu_pte_present(unsigned long l1_mfn,
+                                                   unsigned long dfn,
+                                                   unsigned int level,
+                                                   bool *free)
 {
-    union amd_iommu_pte *table, *pte;
-    unsigned int flush_flags;
+    union amd_iommu_pte *table, *pte, old;
+    unsigned int idx = pfn_to_pde_idx(dfn, level);
 
     table = map_domain_page(_mfn(l1_mfn));
-    pte = &table[pfn_to_pde_idx(dfn, 1)];
+    pte = &table[idx];
+    old = *pte;
 
-    flush_flags = pte->pr ? IOMMU_FLUSHF_modified : 0;
     write_atomic(&pte->raw, 0);
+
+    *free = pt_update_contig_markers(&table->raw, idx, level, PTE_kind_null);
 
     unmap_domain_page(table);
 
-    return flush_flags;
+    return old;
 }
 
-static unsigned int set_iommu_pde_present(union amd_iommu_pte *pte,
-                                          unsigned long next_mfn,
-                                          unsigned int next_level, bool iw,
-                                          bool ir)
+static void set_iommu_pde_present(union amd_iommu_pte *pte,
+                                  unsigned long next_mfn,
+                                  unsigned int next_level,
+                                  bool iw, bool ir)
 {
-    union amd_iommu_pte new = {}, old;
-    unsigned int flush_flags = IOMMU_FLUSHF_added;
+    union amd_iommu_pte new = {};
 
     /*
      * FC bit should be enabled in PTE, this helps to solve potential
@@ -68,50 +74,84 @@ static unsigned int set_iommu_pde_present(union amd_iommu_pte *pte,
     new.next_level = next_level;
     new.pr = true;
 
-    old.raw = read_atomic(&pte->raw);
-    old.ign0 = 0;
-    old.ign1 = 0;
-    old.ign2 = 0;
-
-    if ( old.pr && old.raw != new.raw )
-        flush_flags |= IOMMU_FLUSHF_modified;
-
     write_atomic(&pte->raw, new.raw);
-
-    return flush_flags;
 }
 
-static unsigned int set_iommu_ptes_present(unsigned long pt_mfn,
-                                           unsigned long dfn,
-                                           unsigned long next_mfn,
-                                           unsigned int nr_ptes,
-                                           unsigned int pde_level,
-                                           bool iw, bool ir)
+static union amd_iommu_pte set_iommu_pte_present(unsigned long pt_mfn,
+                                                 unsigned long dfn,
+                                                 unsigned long next_mfn,
+                                                 unsigned int level,
+                                                 bool iw, bool ir,
+                                                 bool *contig)
+{
+    union amd_iommu_pte *table, *pde, old;
+
+    table = map_domain_page(_mfn(pt_mfn));
+    pde = &table[pfn_to_pde_idx(dfn, level)];
+
+    old = *pde;
+    if ( !old.pr || old.next_level ||
+         old.mfn != next_mfn ||
+         old.iw != iw || old.ir != ir )
+    {
+        set_iommu_pde_present(pde, next_mfn, 0, iw, ir);
+        *contig = pt_update_contig_markers(&table->raw,
+                                           pfn_to_pde_idx(dfn, level),
+                                           level, PTE_kind_leaf);
+    }
+    else
+    {
+        old.pr = false; /* signal "no change" to the caller */
+        *contig = false;
+    }
+
+    unmap_domain_page(table);
+
+    return old;
+}
+
+static void set_iommu_ptes_present(unsigned long pt_mfn,
+                                   unsigned long dfn,
+                                   unsigned long next_mfn,
+                                   unsigned int nr_ptes,
+                                   unsigned int pde_level,
+                                   bool iw, bool ir)
 {
     union amd_iommu_pte *table, *pde;
-    unsigned int page_sz, flush_flags = 0;
+    unsigned long page_sz = 1UL << (PTE_PER_TABLE_SHIFT * (pde_level - 1));
 
     table = map_domain_page(_mfn(pt_mfn));
     pde = &table[pfn_to_pde_idx(dfn, pde_level)];
-    page_sz = 1U << (PTE_PER_TABLE_SHIFT * (pde_level - 1));
 
     if ( (void *)(pde + nr_ptes) > (void *)table + PAGE_SIZE )
     {
         ASSERT_UNREACHABLE();
-        return 0;
+        return;
     }
+
+    ASSERT(!(next_mfn & (page_sz - 1)));
 
     while ( nr_ptes-- )
     {
-        flush_flags |= set_iommu_pde_present(pde, next_mfn, 0, iw, ir);
+        ASSERT(!pde->next_level);
+        ASSERT(!pde->u);
+
+        if ( pde > table )
+            ASSERT(pde->ign0 == find_first_set_bit(pde - table));
+        else
+            ASSERT(pde->ign0 == CONTIG_LEVEL_SHIFT);
+
+        pde->iw = iw;
+        pde->ir = ir;
+        pde->fc = true; /* See set_iommu_pde_present(). */
+        pde->mfn = next_mfn;
+        pde->pr = true;
 
         ++pde;
         next_mfn += page_sz;
     }
 
     unmap_domain_page(table);
-
-    return flush_flags;
 }
 
 /*
@@ -281,11 +321,11 @@ static int iommu_pde_from_dfn(struct domain *d, unsigned long dfn,
         {
             unsigned long mfn, pfn;
 
-            pfn =  dfn & ~((1 << (PTE_PER_TABLE_SHIFT * next_level)) - 1);
+            pfn = dfn & ~((1UL << (PTE_PER_TABLE_SHIFT * next_level)) - 1);
             mfn = next_table_mfn;
 
             /* allocate lower level page table */
-            table = iommu_alloc_pgtable(hd);
+            table = iommu_alloc_pgtable(hd, IOMMU_PTE_CONTIG_MASK);
             if ( table == NULL )
             {
                 AMD_IOMMU_ERROR("cannot allocate I/O page table\n");
@@ -300,8 +340,13 @@ static int iommu_pde_from_dfn(struct domain *d, unsigned long dfn,
             smp_wmb();
             set_iommu_pde_present(pde, next_table_mfn, next_level, true,
                                   true);
+            pt_update_contig_markers(&next_table_vaddr->raw,
+                                     pfn_to_pde_idx(dfn, level),
+                                     level, PTE_kind_table);
 
             *flush_flags |= IOMMU_FLUSHF_modified;
+
+            perfc_incr(iommu_pt_shatters);
         }
 
         /* Install lower level page table for non-present entries */
@@ -315,7 +360,7 @@ static int iommu_pde_from_dfn(struct domain *d, unsigned long dfn,
 
             if ( next_table_mfn == 0 )
             {
-                table = iommu_alloc_pgtable(hd);
+                table = iommu_alloc_pgtable(hd, IOMMU_PTE_CONTIG_MASK);
                 if ( table == NULL )
                 {
                     AMD_IOMMU_ERROR("cannot allocate I/O page table\n");
@@ -325,6 +370,9 @@ static int iommu_pde_from_dfn(struct domain *d, unsigned long dfn,
                 next_table_mfn = mfn_x(page_to_mfn(table));
                 set_iommu_pde_present(pde, next_table_mfn, next_level, true,
                                       true);
+                pt_update_contig_markers(&next_table_vaddr->raw,
+                                         pfn_to_pde_idx(dfn, level),
+                                         level, PTE_kind_table);
             }
             else /* should never reach here */
             {
@@ -342,13 +390,39 @@ static int iommu_pde_from_dfn(struct domain *d, unsigned long dfn,
     return 0;
 }
 
+static void queue_free_pt(struct domain_iommu *hd, mfn_t mfn, unsigned int level)
+{
+    if ( level > 1 )
+    {
+        union amd_iommu_pte *pt = map_domain_page(mfn);
+        unsigned int i;
+
+        for ( i = 0; i < PTE_PER_TABLE_SIZE; ++i )
+            if ( pt[i].pr && pt[i].next_level )
+            {
+                ASSERT(pt[i].next_level < level);
+                queue_free_pt(hd, _mfn(pt[i].mfn), pt[i].next_level);
+            }
+
+        unmap_domain_page(pt);
+    }
+
+    iommu_queue_free_pgtable(hd, mfn_to_page(mfn));
+}
+
 int cf_check amd_iommu_map_page(
     struct domain *d, dfn_t dfn, mfn_t mfn, unsigned int flags,
     unsigned int *flush_flags)
 {
     struct domain_iommu *hd = dom_iommu(d);
+    unsigned int level = (IOMMUF_order(flags) / PTE_PER_TABLE_SHIFT) + 1;
+    bool contig;
     int rc;
     unsigned long pt_mfn = 0;
+    union amd_iommu_pte old;
+
+    ASSERT((hd->platform_ops->page_sizes >> IOMMUF_order(flags)) &
+           PAGE_SIZE_4K);
 
     spin_lock(&hd->arch.mapping_lock);
 
@@ -374,7 +448,7 @@ int cf_check amd_iommu_map_page(
         return rc;
     }
 
-    if ( iommu_pde_from_dfn(d, dfn_x(dfn), 1, &pt_mfn, flush_flags, true) ||
+    if ( iommu_pde_from_dfn(d, dfn_x(dfn), level, &pt_mfn, flush_flags, true) ||
          !pt_mfn )
     {
         spin_unlock(&hd->arch.mapping_lock);
@@ -384,21 +458,57 @@ int cf_check amd_iommu_map_page(
         return -EFAULT;
     }
 
-    /* Install 4k mapping */
-    *flush_flags |= set_iommu_ptes_present(pt_mfn, dfn_x(dfn), mfn_x(mfn),
-                                           1, 1, (flags & IOMMUF_writable),
-                                           (flags & IOMMUF_readable));
+    /* Install mapping */
+    old = set_iommu_pte_present(pt_mfn, dfn_x(dfn), mfn_x(mfn), level,
+                                flags & IOMMUF_writable,
+                                flags & IOMMUF_readable, &contig);
+
+    while ( unlikely(contig) && ++level < hd->arch.amd.paging_mode )
+    {
+        struct page_info *pg = mfn_to_page(_mfn(pt_mfn));
+        unsigned long next_mfn;
+
+        if ( iommu_pde_from_dfn(d, dfn_x(dfn), level, &pt_mfn, flush_flags,
+                                false) )
+            BUG();
+        BUG_ON(!pt_mfn);
+
+        next_mfn = mfn_x(mfn) & (~0UL << (PTE_PER_TABLE_SHIFT * (level - 1)));
+        set_iommu_pte_present(pt_mfn, dfn_x(dfn), next_mfn, level,
+                              flags & IOMMUF_writable,
+                              flags & IOMMUF_readable, &contig);
+        *flush_flags |= IOMMU_FLUSHF_modified | IOMMU_FLUSHF_all;
+        iommu_queue_free_pgtable(hd, pg);
+        perfc_incr(iommu_pt_coalesces);
+    }
 
     spin_unlock(&hd->arch.mapping_lock);
+
+    *flush_flags |= IOMMU_FLUSHF_added;
+    if ( old.pr )
+    {
+        *flush_flags |= IOMMU_FLUSHF_modified;
+
+        if ( IOMMUF_order(flags) && old.next_level )
+            queue_free_pt(hd, _mfn(old.mfn), old.next_level);
+    }
 
     return 0;
 }
 
 int cf_check amd_iommu_unmap_page(
-    struct domain *d, dfn_t dfn, unsigned int *flush_flags)
+    struct domain *d, dfn_t dfn, unsigned int order, unsigned int *flush_flags)
 {
     unsigned long pt_mfn = 0;
     struct domain_iommu *hd = dom_iommu(d);
+    unsigned int level = (order / PTE_PER_TABLE_SHIFT) + 1;
+    union amd_iommu_pte old = {};
+
+    /*
+     * While really we could unmap at any granularity, for now we assume unmaps
+     * are issued by common code only at the same granularity as maps.
+     */
+    ASSERT((hd->platform_ops->page_sizes >> order) & PAGE_SIZE_4K);
 
     spin_lock(&hd->arch.mapping_lock);
 
@@ -408,7 +518,7 @@ int cf_check amd_iommu_unmap_page(
         return 0;
     }
 
-    if ( iommu_pde_from_dfn(d, dfn_x(dfn), 1, &pt_mfn, flush_flags, false) )
+    if ( iommu_pde_from_dfn(d, dfn_x(dfn), level, &pt_mfn, flush_flags, false) )
     {
         spin_unlock(&hd->arch.mapping_lock);
         AMD_IOMMU_ERROR("invalid IO pagetable entry dfn = %"PRI_dfn"\n",
@@ -419,13 +529,82 @@ int cf_check amd_iommu_unmap_page(
 
     if ( pt_mfn )
     {
+        bool free;
+
         /* Mark PTE as 'page not present'. */
-        *flush_flags |= clear_iommu_pte_present(pt_mfn, dfn_x(dfn));
+        old = clear_iommu_pte_present(pt_mfn, dfn_x(dfn), level, &free);
+
+        while ( unlikely(free) && ++level < hd->arch.amd.paging_mode )
+        {
+            struct page_info *pg = mfn_to_page(_mfn(pt_mfn));
+
+            if ( iommu_pde_from_dfn(d, dfn_x(dfn), level, &pt_mfn,
+                                    flush_flags, false) )
+                BUG();
+            BUG_ON(!pt_mfn);
+
+            clear_iommu_pte_present(pt_mfn, dfn_x(dfn), level, &free);
+            *flush_flags |= IOMMU_FLUSHF_all;
+            iommu_queue_free_pgtable(hd, pg);
+            perfc_incr(iommu_pt_coalesces);
+        }
     }
 
     spin_unlock(&hd->arch.mapping_lock);
 
+    if ( old.pr )
+    {
+        *flush_flags |= IOMMU_FLUSHF_modified;
+
+        if ( order && old.next_level )
+            queue_free_pt(hd, _mfn(old.mfn), old.next_level);
+    }
+
     return 0;
+}
+
+void amd_iommu_print_entries(const struct amd_iommu *iommu, unsigned int dev_id,
+                             dfn_t dfn)
+{
+    mfn_t pt_mfn;
+    unsigned int level;
+    const struct amd_iommu_dte *dt = iommu->dev_table.buffer;
+
+    if ( !dt[dev_id].tv )
+    {
+        printk("%pp: no root\n", &PCI_SBDF(iommu->seg, dev_id));
+        return;
+    }
+
+    pt_mfn = _mfn(dt[dev_id].pt_root);
+    level = dt[dev_id].paging_mode;
+    printk("%pp root @ %"PRI_mfn" (%u levels) dfn=%"PRI_dfn"\n",
+           &PCI_SBDF(iommu->seg, dev_id), mfn_x(pt_mfn), level, dfn_x(dfn));
+
+    while ( level )
+    {
+        const union amd_iommu_pte *pt = map_domain_page(pt_mfn);
+        unsigned int idx = pfn_to_pde_idx(dfn_x(dfn), level);
+        union amd_iommu_pte pte = pt[idx];
+
+        unmap_domain_page(pt);
+
+        printk("  L%u[%03x] = %"PRIx64" %c%c\n", level, idx, pte.raw,
+               pte.pr ? pte.ir ? 'r' : '-' : 'n',
+               pte.pr ? pte.iw ? 'w' : '-' : 'p');
+
+        if ( !pte.pr )
+            break;
+
+        if ( pte.next_level >= level )
+        {
+            printk("  L%u[%03x]: next: %u\n", level, idx, pte.next_level);
+            break;
+        }
+
+        pt_mfn = _mfn(pte.mfn);
+        level = pte.next_level;
+    }
 }
 
 static unsigned long flush_count(unsigned long dfn, unsigned long page_count,
@@ -444,15 +623,18 @@ int cf_check amd_iommu_flush_iotlb_pages(
 {
     unsigned long dfn_l = dfn_x(dfn);
 
-    ASSERT(page_count && !dfn_eq(dfn, INVALID_DFN));
-    ASSERT(flush_flags);
+    if ( !(flush_flags & IOMMU_FLUSHF_all) )
+    {
+        ASSERT(page_count && !dfn_eq(dfn, INVALID_DFN));
+        ASSERT(flush_flags);
+    }
 
     /* Unless a PTE was modified, no flush is required */
     if ( !(flush_flags & IOMMU_FLUSHF_modified) )
         return 0;
 
-    /* If the range wraps then just flush everything */
-    if ( dfn_l + page_count < dfn_l )
+    /* If so requested or if the range wraps then just flush everything. */
+    if ( (flush_flags & IOMMU_FLUSHF_all) || dfn_l + page_count < dfn_l )
     {
         amd_iommu_flush_all_pages(d);
         return 0;
@@ -474,13 +656,6 @@ int cf_check amd_iommu_flush_iotlb_pages(
         amd_iommu_flush_pages(d, dfn_l, 18);
     else
         amd_iommu_flush_all_pages(d);
-
-    return 0;
-}
-
-int cf_check amd_iommu_flush_iotlb_all(struct domain *d)
-{
-    amd_iommu_flush_all_pages(d);
 
     return 0;
 }
@@ -552,7 +727,7 @@ int cf_check amd_iommu_get_reserved_device_memory(
             const struct pci_dev *pdev;
 
             pcidevs_lock();
-            pdev = pci_get_pdev(seg, sbdf.bus, sbdf.devfn);
+            pdev = pci_get_pdev(NULL, sbdf);
             pcidevs_unlock();
 
             if ( pdev )
@@ -626,7 +801,7 @@ static int fill_qpt(union amd_iommu_pte *this, unsigned int level,
                  * page table pages, and the resulting allocations are always
                  * zeroed.
                  */
-                pgs[level] = iommu_alloc_pgtable(hd);
+                pgs[level] = iommu_alloc_pgtable(hd, 0);
                 if ( !pgs[level] )
                 {
                     rc = -ENOMEM;
@@ -684,7 +859,7 @@ int cf_check amd_iommu_quarantine_init(struct pci_dev *pdev, bool scratch_page)
         return 0;
     }
 
-    pdev->arch.amd.root_table = iommu_alloc_pgtable(hd);
+    pdev->arch.amd.root_table = iommu_alloc_pgtable(hd, 0);
     if ( !pdev->arch.amd.root_table )
         return -ENOMEM;
 

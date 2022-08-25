@@ -50,6 +50,8 @@ type x86_arch_emulation_flags =
 
 type x86_arch_misc_flags =
 	| X86_MSR_RELAXED
+	| X86_ASSISTED_XAPIC
+	| X86_ASSISTED_X2APIC
 
 type xen_x86_arch_domainconfig =
 {
@@ -85,6 +87,7 @@ type domctl_create_config =
 	max_grant_frames: int;
 	max_maptrack_frames: int;
 	max_grant_version: int;
+	cpupool_id: int32;
 	arch: arch_domainconfig;
 }
 
@@ -127,6 +130,14 @@ type physinfo_cap_flag =
 	| CAP_Gnttab_v1
 	| CAP_Gnttab_v2
 
+
+type x86_physinfo_arch_cap_flag =
+	| CAP_X86_ASSISTED_XAPIC
+	| CAP_X86_ASSISTED_X2APIC
+
+type physinfo_arch_cap_flag =
+	| X86 of x86_physinfo_arch_cap_flag
+
 type physinfo =
 {
 	threads_per_core : int;
@@ -140,6 +151,7 @@ type physinfo =
 	(* XXX hw_cap *)
 	capabilities     : physinfo_cap_flag list;
 	max_nr_cpus      : int;
+	arch_capabilities : physinfo_arch_cap_flag list;
 }
 
 type version =

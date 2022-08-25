@@ -63,7 +63,7 @@
 
 #include <yajl/yajl_gen.h>
 
-#include "_xen_list.h"
+#include "xen_list.h"
 #include "libxl_internal.h"
 
 /* #define DEBUG_RECEIVED */
@@ -582,7 +582,7 @@ out:
 static int qmp_synchronous_send(libxl__qmp_handler *qmp, const char *cmd,
                                 libxl__json_object *args,
                                 qmp_callback_t callback, void *opaque,
-                                int ask_timeout)
+                                time_t ask_timeout)
 {
     int id = 0;
     int ret = 0;

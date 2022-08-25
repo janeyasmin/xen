@@ -126,11 +126,11 @@ DEFINE_PER_CPU_PAGE_ALIGNED(struct tss_page, tss_page);
 static int debug_stack_lines = 20;
 integer_param("debug_stack_lines", debug_stack_lines);
 
-static bool opt_ler;
+static bool __ro_after_init opt_ler;
 boolean_param("ler", opt_ler);
 
 /* LastExceptionFromIP on this hardware.  Zero if LER is not in use. */
-unsigned int __read_mostly ler_msr;
+unsigned int __ro_after_init ler_msr;
 
 const unsigned int nmi_cpu;
 
@@ -767,9 +767,13 @@ static int cf_check nmi_show_execution_state(
 
     if ( opt_show_all )
         show_execution_state(regs);
+    else if ( guest_mode(regs) )
+        printk(XENLOG_ERR "CPU%d\t%pv\t%04x:%p in guest\n",
+               cpu, current, regs->cs, _p(regs->rip));
     else
-        printk(XENLOG_ERR "CPU%d @ %04x:%08lx (%pS)\n", cpu, regs->cs,
-               regs->rip, guest_mode(regs) ? NULL : _p(regs->rip));
+        printk(XENLOG_ERR "CPU%d\t%pv\t%04x:%p in Xen: %pS\n",
+               cpu, current, regs->cs, _p(regs->rip), _p(regs->rip));
+
     cpumask_clear_cpu(cpu, &show_state_mask);
 
     return 1;
@@ -845,6 +849,9 @@ void fatal_trap(const struct cpu_user_regs *regs, bool show_remote)
                     msecs = 10;
                 }
             }
+            if ( pending )
+                printk("Non-responding CPUs: {%*pbl}\n",
+                       CPUMASK_PR(&show_state_mask));
         }
     }
 
@@ -1117,7 +1124,8 @@ void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
         if ( !is_hvm_domain(d) || subleaf != 0 )
             break;
 
-        if ( cpu_has_vmx_apic_reg_virt )
+        if ( cpu_has_vmx_apic_reg_virt &&
+             has_assisted_xapic(d) )
             res->a |= XEN_HVM_CPUID_APIC_ACCESS_VIRT;
 
         /*
@@ -1126,7 +1134,7 @@ void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
          * and wrmsr in the guest will run without VMEXITs (see
          * vmx_vlapic_msr_changed()).
          */
-        if ( cpu_has_vmx_virtualize_x2apic_mode &&
+        if ( has_assisted_x2apic(d) &&
              cpu_has_vmx_apic_reg_virt &&
              cpu_has_vmx_virtual_intr_delivery )
             res->a |= XEN_HVM_CPUID_X2APIC_VIRT;
@@ -1151,6 +1159,12 @@ void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
         /* Indicate presence of domain id and set it in ecx */
         res->a |= XEN_HVM_CPUID_DOMID_PRESENT;
         res->c = d->domain_id;
+
+        /*
+         * Per-vCPU event channel upcalls are implemented and work
+         * correctly with PIRQs routed over event channels.
+         */
+        res->a |= XEN_HVM_CPUID_UPCALL_VECTOR;
 
         break;
 
@@ -2133,7 +2147,7 @@ static void __init set_intr_gate(unsigned int n, void *addr)
     __set_intr_gate(n, 0, addr);
 }
 
-static unsigned int calc_ler_msr(void)
+static unsigned int noinline __init calc_ler_msr(void)
 {
     switch ( boot_cpu_data.x86_vendor )
     {
@@ -2171,8 +2185,17 @@ void percpu_traps_init(void)
     if ( !opt_ler )
         return;
 
-    if ( !ler_msr && (ler_msr = calc_ler_msr()) )
+    if ( !ler_msr )
+    {
+        ler_msr = calc_ler_msr();
+        if ( !ler_msr )
+        {
+            opt_ler = false;
+            return;
+        }
+
         setup_force_cpu_cap(X86_FEATURE_XEN_LBR);
+    }
 
     if ( cpu_has_xen_lbr )
         wrmsrl(MSR_IA32_DEBUGCTLMSR, IA32_DEBUGCTLMSR_LBR);

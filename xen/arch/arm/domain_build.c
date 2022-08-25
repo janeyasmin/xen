@@ -27,6 +27,7 @@
 #include <asm/setup.h>
 #include <asm/cpufeature.h>
 #include <asm/domain_build.h>
+#include <xen/event.h>
 
 #include <xen/irq.h>
 #include <xen/grant_table.h>
@@ -35,7 +36,10 @@
 static unsigned int __initdata opt_dom0_max_vcpus;
 integer_param("dom0_max_vcpus", opt_dom0_max_vcpus);
 
-/* If true, the extended regions support is enabled for dom0 */
+/*
+ * If true, the extended regions support is enabled for dom0 and
+ * dom0less domUs.
+ */
 static bool __initdata opt_ext_regions = true;
 boolean_param("ext_regions", opt_ext_regions);
 
@@ -111,7 +115,8 @@ static bool __init insert_11_bank(struct domain *d,
                                   struct page_info *pg,
                                   unsigned int order)
 {
-    int res, i;
+    unsigned int i;
+    int res;
     mfn_t smfn;
     paddr_t start, size;
 
@@ -264,7 +269,7 @@ static void __init allocate_memory_11(struct domain *d,
     const unsigned int min_order = get_order_from_bytes(MB(4));
     struct page_info *pg;
     unsigned int order = get_allocation_size(kinfo->unassigned_mem);
-    int i;
+    unsigned int i;
 
     bool lowmem = true;
     unsigned int lowmem_bitsize = min(32U, arch_get_dma_bitsize());
@@ -1002,7 +1007,7 @@ static void __init set_interrupt(gic_interrupt_t interrupt,
  */
 static int __init fdt_property_interrupts(const struct kernel_info *kinfo,
                                           gic_interrupt_t *intr,
-                                          unsigned num_irq)
+                                          unsigned int num_irq)
 {
     int res;
 
@@ -1022,8 +1027,8 @@ static int __init make_memory_node(const struct domain *d,
                                    int addrcells, int sizecells,
                                    struct meminfo *mem)
 {
-    int res, i;
-    int reg_size = addrcells + sizecells;
+    unsigned int i;
+    int res, reg_size = addrcells + sizecells;
     int nr_cells = 0;
     /* Placeholder for memory@ + a 64-bit number + \0 */
     char buf[24];
@@ -1327,6 +1332,36 @@ out:
     return res;
 }
 
+static int __init find_domU_holes(const struct kernel_info *kinfo,
+                                  struct meminfo *ext_regions)
+{
+    unsigned int i;
+    paddr_t bankend;
+    const paddr_t bankbase[] = GUEST_RAM_BANK_BASES;
+    const paddr_t banksize[] = GUEST_RAM_BANK_SIZES;
+    int res = -ENOENT;
+
+    for ( i = 0; i < GUEST_RAM_BANKS; i++ )
+    {
+        struct membank *ext_bank = &(ext_regions->bank[ext_regions->nr_banks]);
+
+        ext_bank->start = ROUNDUP(bankbase[i] + kinfo->mem.bank[i].size, SZ_2M);
+
+        bankend = ~0ULL >> (64 - p2m_ipa_bits);
+        bankend = min(bankend, bankbase[i] + banksize[i] - 1);
+        if ( bankend > ext_bank->start )
+            ext_bank->size = bankend - ext_bank->start + 1;
+
+        /* 64MB is the minimum size of an extended region */
+        if ( ext_bank->size < MB(64) )
+            continue;
+        ext_regions->nr_banks++;
+        res = 0;
+    }
+
+    return res;
+}
+
 static int __init make_hypervisor_node(struct domain *d,
                                        const struct kernel_info *kinfo,
                                        int addrcells, int sizecells)
@@ -1363,12 +1398,13 @@ static int __init make_hypervisor_node(struct domain *d,
 
     if ( !opt_ext_regions )
     {
-        printk(XENLOG_INFO "The extended regions support is disabled\n");
+        printk(XENLOG_INFO "%pd: extended regions support is disabled\n", d);
         nr_ext_regions = 0;
     }
     else if ( is_32bit_domain(d) )
     {
-        printk(XENLOG_WARNING "The extended regions are only supported for 64-bit guest currently\n");
+        printk(XENLOG_WARNING
+               "%pd: extended regions not supported for 32-bit guests\n", d);
         nr_ext_regions = 0;
     }
     else
@@ -1377,13 +1413,21 @@ static int __init make_hypervisor_node(struct domain *d,
         if ( !ext_regions )
             return -ENOMEM;
 
-        if ( !is_iommu_enabled(d) )
-            res = find_unallocated_memory(kinfo, ext_regions);
+        if ( is_domain_direct_mapped(d) )
+        {
+            if ( !is_iommu_enabled(d) )
+                res = find_unallocated_memory(kinfo, ext_regions);
+            else
+                res = find_memory_holes(kinfo, ext_regions);
+        }
         else
-            res = find_memory_holes(kinfo, ext_regions);
+        {
+            res = find_domU_holes(kinfo, ext_regions);
+        }
 
         if ( res )
-            printk(XENLOG_WARNING "Failed to allocate extended regions\n");
+            printk(XENLOG_WARNING "%pd: failed to allocate extended regions\n",
+                   d);
         nr_ext_regions = ext_regions->nr_banks;
     }
 
@@ -1404,8 +1448,8 @@ static int __init make_hypervisor_node(struct domain *d,
         u64 start = ext_regions->bank[i].start;
         u64 size = ext_regions->bank[i].size;
 
-        printk("Extended region %d: %#"PRIx64"->%#"PRIx64"\n",
-               i, start, start + size);
+        printk("%pd: extended region %d: %#"PRIx64"->%#"PRIx64"\n",
+               d, i, start, start + size);
 
         dt_child_set_range(&cells, addrcells, sizecells, start, size);
     }
@@ -2771,6 +2815,8 @@ static int __init prepare_dtb_domU(struct domain *d, struct kernel_info *kinfo)
     int ret;
 
     kinfo->phandle_gic = GUEST_PHANDLE_GIC;
+    kinfo->gnttab_start = GUEST_GNTTAB_BASE;
+    kinfo->gnttab_size = GUEST_GNTTAB_SIZE;
 
     addrcells = GUEST_ROOT_ADDRESS_CELLS;
     sizecells = GUEST_ROOT_SIZE_CELLS;
@@ -2841,6 +2887,13 @@ static int __init prepare_dtb_domU(struct domain *d, struct kernel_info *kinfo)
 #ifdef CONFIG_SBSA_VUART_CONSOLE
         ret = make_vpl011_uart_node(kinfo);
 #endif
+        if ( ret )
+            goto err;
+    }
+
+    if ( kinfo->dom0less_enhanced )
+    {
+        ret = make_hypervisor_node(d, kinfo, addrcells, sizecells);
         if ( ret )
             goto err;
     }
@@ -3111,10 +3164,30 @@ static int __init construct_domain(struct domain *d, struct kernel_info *kinfo)
     return 0;
 }
 
+static int __init alloc_xenstore_evtchn(struct domain *d)
+{
+    evtchn_alloc_unbound_t alloc;
+    int rc;
+
+    alloc.dom = d->domain_id;
+    alloc.remote_dom = hardware_domain->domain_id;
+    rc = evtchn_alloc_unbound(&alloc);
+    if ( rc )
+    {
+        printk("Failed allocating event channel for domain\n");
+        return rc;
+    }
+
+    d->arch.hvm.params[HVM_PARAM_STORE_EVTCHN] = alloc.port;
+
+    return 0;
+}
+
 static int __init construct_domU(struct domain *d,
                                  const struct dt_device_node *node)
 {
     struct kernel_info kinfo = {};
+    const char *dom0less_enhanced;
     int rc;
     u64 mem;
 
@@ -3129,6 +3202,17 @@ static int __init construct_domU(struct domain *d,
     printk("*** LOADING DOMU cpus=%u memory=%"PRIx64"KB ***\n", d->max_vcpus, mem);
 
     kinfo.vpl011 = dt_property_read_bool(node, "vpl011");
+
+    rc = dt_property_read_string(node, "xen,enhanced", &dom0less_enhanced);
+    if ( rc == -EILSEQ ||
+         rc == -ENODATA ||
+         (rc == 0 && !strcmp(dom0less_enhanced, "enabled")) )
+    {
+        if ( hardware_domain )
+            kinfo.dom0less_enhanced = true;
+        else
+            panic("Tried to use xen,enhanced without dom0\n");
+    }
 
     if ( vcpu_create(d, 0) == NULL )
         return -ENOMEM;
@@ -3167,6 +3251,15 @@ static int __init construct_domU(struct domain *d,
     rc = construct_domain(d, &kinfo);
     if ( rc < 0 )
         return rc;
+
+    if ( kinfo.dom0less_enhanced )
+    {
+        ASSERT(hardware_domain);
+        rc = alloc_xenstore_evtchn(d);
+        if ( rc < 0 )
+            return rc;
+        d->arch.hvm.params[HVM_PARAM_STORE_PFN] = ~0ULL;
+    }
 
     return rc;
 }

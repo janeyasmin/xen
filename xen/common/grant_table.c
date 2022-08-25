@@ -99,8 +99,6 @@ struct grant_table {
 
     /* Domain to which this struct grant_table belongs. */
     struct domain *domain;
-
-    struct grant_table_arch arch;
 };
 
 unsigned int __read_mostly opt_max_grant_frames = 64;
@@ -895,7 +893,7 @@ done:
 static int _set_status(const grant_entry_header_t *shah,
                        grant_status_t *status,
                        struct domain *rd,
-                       unsigned rgt_version,
+                       unsigned int rgt_version,
                        struct active_grant_entry *act,
                        int readonly,
                        int mapflag,
@@ -1763,8 +1761,8 @@ static int
 gnttab_populate_status_frames(struct domain *d, struct grant_table *gt,
                               unsigned int req_nr_frames)
 {
-    unsigned i;
-    unsigned req_status_frames;
+    unsigned int i;
+    unsigned int req_status_frames;
 
     req_status_frames = grant_to_status_frames(req_nr_frames);
 
@@ -2018,14 +2016,9 @@ int grant_table_init(struct domain *d, int max_grant_frames,
 
     grant_write_lock(gt);
 
-    ret = gnttab_init_arch(gt);
-    if ( ret )
-        goto unlock;
-
     /* gnttab_grow_table() allocates a min number of frames, so 0 is okay. */
     ret = gnttab_grow_table(d, 0);
 
- unlock:
     grant_write_unlock(gt);
 
  out:
@@ -3447,7 +3440,7 @@ gnttab_swap_grant_ref(XEN_GUEST_HANDLE_PARAM(gnttab_swap_grant_ref_t) uop,
     return 0;
 }
 
-static int cache_flush(const gnttab_cache_flush_t *cflush, grant_ref_t *cur_ref)
+static int _cache_flush(const gnttab_cache_flush_t *cflush, grant_ref_t *cur_ref)
 {
     struct domain *d, *owner;
     struct page_info *page;
@@ -3541,7 +3534,7 @@ gnttab_cache_flush(XEN_GUEST_HANDLE_PARAM(gnttab_cache_flush_t) uop,
             return -EFAULT;
         for ( ; ; )
         {
-            int ret = cache_flush(&op, cur_ref);
+            int ret = _cache_flush(&op, cur_ref);
 
             if ( ret < 0 )
                 return ret;
@@ -3559,8 +3552,7 @@ gnttab_cache_flush(XEN_GUEST_HANDLE_PARAM(gnttab_cache_flush_t) uop,
     return 0;
 }
 
-long cf_check
-do_grant_table_op(
+long do_grant_table_op(
     unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) uop, unsigned int count)
 {
     long rc;
@@ -3939,8 +3931,6 @@ grant_table_destroy(
 
     if ( t == NULL )
         return;
-
-    gnttab_destroy_arch(t);
 
     for ( i = 0; i < nr_grant_frames(t); i++ )
         free_xenheap_page(t->shared_raw[i]);

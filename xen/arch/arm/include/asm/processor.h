@@ -127,10 +127,10 @@
 #define MPIDR_LEVEL_MASK        ((1 << MPIDR_LEVEL_BITS) - 1)
 
 #define MPIDR_LEVEL_SHIFT(level) \
-         (((1 << level) >> 1) << MPIDR_LEVEL_BITS_SHIFT)
+         (((1 << (level)) >> 1) << MPIDR_LEVEL_BITS_SHIFT)
 
 #define MPIDR_AFFINITY_LEVEL(mpidr, level) \
-         ((mpidr >> MPIDR_LEVEL_SHIFT(level)) & MPIDR_LEVEL_MASK)
+         (((mpidr) >> MPIDR_LEVEL_SHIFT(level)) & MPIDR_LEVEL_MASK)
 
 #define AFFINITY_MASK(level)    ~((_AC(0x1,UL) << MPIDR_LEVEL_SHIFT(level)) - 1)
 
@@ -219,8 +219,14 @@
                          SCTLR_Axx_ELx_A    | SCTLR_Axx_ELx_C   |\
                          SCTLR_Axx_ELx_WXN  | SCTLR_Axx_ELx_EE)
 
+/*
+ * Cppcheck preprocessor is wrongly throwing the error here so disable
+ * this check for cppcheck runs.
+ */
+#ifndef CPPCHECK
 #if (SCTLR_EL2_SET ^ SCTLR_EL2_CLEAR) != 0xffffffffffffffffUL
 #error "Inconsistent SCTLR_EL2 set/clear bits"
+#endif
 #endif
 
 #endif
@@ -552,7 +558,10 @@ extern register_t __cpu_logical_map[];
 void panic_PAR(uint64_t par);
 
 void show_execution_state(const struct cpu_user_regs *regs);
+/* Debugging functions are declared with external linkage to aid development. */
 void show_registers(const struct cpu_user_regs *regs);
+void show_stack(const struct cpu_user_regs *regs);
+
 //#define dump_execution_state() run_in_exception_handler(show_execution_state)
 #define dump_execution_state() WARN()
 

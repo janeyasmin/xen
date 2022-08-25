@@ -575,6 +575,9 @@ static void cf_check parse_event_log_entry(struct amd_iommu *iommu, u32 entry[])
                (flags & 0x002) ? " NX" : "",
                (flags & 0x001) ? " GN" : "");
 
+        if ( iommu_verbose )
+            amd_iommu_print_entries(iommu, device_id, daddr_to_dfn(addr));
+
         for ( bdf = 0; bdf < ivrs_bdf_entries; bdf++ )
             if ( get_dma_requestor_id(iommu->seg, bdf) == device_id )
                 pci_check_disable_device(iommu->seg, PCI_BUS(bdf),
@@ -636,8 +639,7 @@ static void cf_check parse_ppr_log_entry(struct amd_iommu *iommu, u32 entry[])
     struct pci_dev *pdev;
 
     pcidevs_lock();
-    pdev = pci_get_real_pdev(iommu->seg, PCI_BUS(device_id),
-                             PCI_DEVFN(device_id));
+    pdev = pci_get_real_pdev(PCI_SBDF(iommu->seg, device_id));
     pcidevs_unlock();
 
     if ( pdev )
@@ -745,8 +747,7 @@ static bool_t __init set_iommu_interrupt_handler(struct amd_iommu *iommu)
     }
 
     pcidevs_lock();
-    iommu->msi.dev = pci_get_pdev(iommu->seg, PCI_BUS(iommu->bdf),
-                                  PCI_DEVFN(iommu->bdf));
+    iommu->msi.dev = pci_get_pdev(NULL, PCI_SBDF(iommu->seg, iommu->bdf));
     pcidevs_unlock();
     if ( !iommu->msi.dev )
     {
@@ -1283,7 +1284,7 @@ static int __init cf_check amd_iommu_setup_device_table(
                 if ( !pci_init )
                     continue;
                 pcidevs_lock();
-                pdev = pci_get_pdev(seg, PCI_BUS(bdf), PCI_DEVFN(bdf));
+                pdev = pci_get_pdev(NULL, PCI_SBDF(seg, bdf));
                 pcidevs_unlock();
             }
 

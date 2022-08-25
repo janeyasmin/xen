@@ -1597,6 +1597,7 @@ int xc_vmtrace_set_option(xc_interface *xch, uint32_t domid,
 
 int xc_domctl(xc_interface *xch, struct xen_domctl *domctl);
 int xc_sysctl(xc_interface *xch, struct xen_sysctl *sysctl);
+long xc_memory_op(xc_interface *xch, unsigned int cmd, void *arg, size_t len);
 
 int xc_version(xc_interface *xch, int cmd, void *arg);
 
@@ -2096,6 +2097,8 @@ int xc_monitor_privileged_call(xc_interface *xch, uint32_t domain_id,
                                bool enable);
 int xc_monitor_emul_unimplemented(xc_interface *xch, uint32_t domain_id,
                                   bool enable);
+int xc_monitor_vmexit(xc_interface *xch, uint32_t domain_id, bool enable,
+                      bool sync);
 /**
  * This function enables / disables emulation for each REP for a
  * REP-compatible instruction.
@@ -2290,7 +2293,8 @@ int xc_memshr_fork(xc_interface *xch,
  *
  * With VMs that have a lot of memory this call may block for a long time.
  */
-int xc_memshr_fork_reset(xc_interface *xch, uint32_t forked_domain);
+int xc_memshr_fork_reset(xc_interface *xch, uint32_t forked_domain,
+                         bool reset_state, bool reset_memory);
 
 /* Debug calls: return the number of pages referencing the shared frame backing
  * the input argument. Should be one or greater.
@@ -2516,7 +2520,7 @@ int xc_psr_cmt_get_l3_event_mask(xc_interface *xch, uint32_t *event_mask);
 int xc_psr_cmt_get_l3_cache_size(xc_interface *xch, uint32_t cpu,
                                  uint32_t *l3_cache_size);
 int xc_psr_cmt_get_data(xc_interface *xch, uint32_t rmid, uint32_t cpu,
-                        uint32_t psr_cmt_type, uint64_t *monitor_data,
+                        xc_psr_cmt_type type, uint64_t *monitor_data,
                         uint64_t *tsc);
 int xc_psr_cmt_enabled(xc_interface *xch);
 

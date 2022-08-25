@@ -2,13 +2,19 @@
 #include <xen/cpu.h>
 #include <xen/delay.h>
 #include <xen/lib.h>
+#include <xen/shutdown.h>
 #include <xen/smp.h>
 #include <asm/platform.h>
 #include <asm/psci.h>
 
 static void noreturn halt_this_cpu(void *arg)
 {
-    stop_cpu();
+    local_irq_disable();
+    /* Make sure the write happens before we sleep forever */
+    dsb(sy);
+    isb();
+    while ( 1 )
+        wfi();
 }
 
 void machine_halt(void)

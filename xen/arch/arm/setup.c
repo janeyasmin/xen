@@ -201,9 +201,17 @@ static void __init processor_id(void)
 
 static void __init dt_unreserved_regions(paddr_t s, paddr_t e,
                                          void (*cb)(paddr_t, paddr_t),
-                                         int first)
+                                         unsigned int first)
 {
-    int i, nr = fdt_num_mem_rsv(device_tree_flattened);
+    unsigned int i, nr;
+    int rc;
+
+    rc = fdt_num_mem_rsv(device_tree_flattened);
+    if ( rc < 0 )
+        panic("Unable to retrieve the number of reserved regions (rc=%d)\n",
+              rc);
+
+    nr = rc;
 
     for ( i = first; i < nr ; i++ )
     {
@@ -249,7 +257,8 @@ static void __init dt_unreserved_regions(paddr_t s, paddr_t e,
 }
 
 void __init fw_unreserved_regions(paddr_t s, paddr_t e,
-                                  void (*cb)(paddr_t, paddr_t), int first)
+                                  void (*cb)(paddr_t, paddr_t),
+                                  unsigned int first)
 {
     if ( acpi_disabled )
         dt_unreserved_regions(s, e, cb, first);
@@ -636,14 +645,64 @@ static void __init init_staticmem_pages(void)
 #endif
 }
 
+/*
+ * Populate the boot allocator. All the RAM but the following regions
+ * will be added:
+ *  - Modules (e.g., Xen, Kernel)
+ *  - Reserved regions
+ *  - Xenheap (arm32 only)
+ */
+static void __init populate_boot_allocator(void)
+{
+    unsigned int i;
+    const struct meminfo *banks = &bootinfo.mem;
+
+    for ( i = 0; i < banks->nr_banks; i++ )
+    {
+        const struct membank *bank = &banks->bank[i];
+        paddr_t bank_end = bank->start + bank->size;
+        paddr_t s, e;
+
+        s = bank->start;
+        while ( s < bank_end )
+        {
+            paddr_t n = bank_end;
+
+            e = next_module(s, &n);
+
+            if ( e == ~(paddr_t)0 )
+                e = n = bank_end;
+
+            /*
+             * Module in a RAM bank other than the one which we are
+             * not dealing with here.
+             */
+            if ( e > bank_end )
+                e = bank_end;
+
+#ifdef CONFIG_ARM_32
+            /* Avoid the xenheap */
+            if ( s < mfn_to_maddr(xenheap_mfn_end) &&
+                 mfn_to_maddr(xenheap_mfn_start) < e )
+            {
+                e = mfn_to_maddr(xenheap_mfn_start);
+                n = mfn_to_maddr(xenheap_mfn_end);
+            }
+#endif
+
+            fw_unreserved_regions(s, e, init_boot_pages, 0);
+            s = n;
+        }
+    }
+}
+
 #ifdef CONFIG_ARM_32
 static void __init setup_mm(void)
 {
-    paddr_t ram_start, ram_end, ram_size;
-    paddr_t s, e;
+    paddr_t ram_start, ram_end, ram_size, e;
     unsigned long ram_pages;
     unsigned long heap_pages, xenheap_pages, domheap_pages;
-    int i;
+    unsigned int i;
     const uint32_t ctr = READ_CP32(CTR);
 
     if ( !bootinfo.mem.nr_banks )
@@ -715,50 +774,31 @@ static void __init setup_mm(void)
            opt_xenheap_megabytes ? ", from command-line" : "");
     printk("Dom heap: %lu pages\n", domheap_pages);
 
-    setup_xenheap_mappings((e >> PAGE_SHIFT) - xenheap_pages, xenheap_pages);
+    /*
+     * We need some memory to allocate the page-tables used for the
+     * xenheap mappings. So populate the boot allocator first.
+     *
+     * This requires us to set xenheap_mfn_{start, end} first so the Xenheap
+     * region can be avoided.
+     */
+    xenheap_mfn_start = _mfn((e >> PAGE_SHIFT) - xenheap_pages);
+    xenheap_mfn_end = mfn_add(xenheap_mfn_start, xenheap_pages);
 
-    /* Add non-xenheap memory */
-    for ( i = 0; i < bootinfo.mem.nr_banks; i++ )
-    {
-        paddr_t bank_start = bootinfo.mem.bank[i].start;
-        paddr_t bank_end = bank_start + bootinfo.mem.bank[i].size;
+    populate_boot_allocator();
 
-        s = bank_start;
-        while ( s < bank_end )
-        {
-            paddr_t n = bank_end;
-
-            e = next_module(s, &n);
-
-            if ( e == ~(paddr_t)0 )
-            {
-                e = n = ram_end;
-            }
-
-            /*
-             * Module in a RAM bank other than the one which we are
-             * not dealing with here.
-             */
-            if ( e > bank_end )
-                e = bank_end;
-
-            /* Avoid the xenheap */
-            if ( s < mfn_to_maddr(mfn_add(xenheap_mfn_start, xenheap_pages))
-                 && mfn_to_maddr(xenheap_mfn_start) < e )
-            {
-                e = mfn_to_maddr(xenheap_mfn_start);
-                n = mfn_to_maddr(mfn_add(xenheap_mfn_start, xenheap_pages));
-            }
-
-            fw_unreserved_regions(s, e, init_boot_pages, 0);
-
-            s = n;
-        }
-    }
+    setup_xenheap_mappings(mfn_x(xenheap_mfn_start), xenheap_pages);
 
     /* Frame table covers all of RAM region, including holes */
     setup_frametable_mappings(ram_start, ram_end);
     max_page = PFN_DOWN(ram_end);
+
+    /*
+     * The allocators may need to use map_domain_page() (such as for
+     * scrubbing pages). So we need to prepare the domheap area first.
+     */
+    if ( !init_domheap_mappings(smp_processor_id()) )
+        panic("CPU%u: Unable to prepare the domheap page-tables\n",
+              smp_processor_id());
 
     /* Add xenheap memory that was not already added to the boot allocator. */
     init_xenheap_pages(mfn_to_maddr(xenheap_mfn_start),
@@ -769,45 +809,36 @@ static void __init setup_mm(void)
 #else /* CONFIG_ARM_64 */
 static void __init setup_mm(void)
 {
+    const struct meminfo *banks = &bootinfo.mem;
     paddr_t ram_start = ~0;
     paddr_t ram_end = 0;
     paddr_t ram_size = 0;
-    int bank;
+    unsigned int i;
 
     init_pdx();
 
+    /*
+     * We need some memory to allocate the page-tables used for the xenheap
+     * mappings. But some regions may contain memory already allocated
+     * for other uses (e.g. modules, reserved-memory...).
+     *
+     * For simplicity, add all the free regions in the boot allocator.
+     */
+    populate_boot_allocator();
+
     total_pages = 0;
-    for ( bank = 0 ; bank < bootinfo.mem.nr_banks; bank++ )
+
+    for ( i = 0; i < banks->nr_banks; i++ )
     {
-        paddr_t bank_start = bootinfo.mem.bank[bank].start;
-        paddr_t bank_size = bootinfo.mem.bank[bank].size;
-        paddr_t bank_end = bank_start + bank_size;
-        paddr_t s, e;
+        const struct membank *bank = &banks->bank[i];
+        paddr_t bank_end = bank->start + bank->size;
 
-        ram_size = ram_size + bank_size;
-        ram_start = min(ram_start,bank_start);
-        ram_end = max(ram_end,bank_end);
+        ram_size = ram_size + bank->size;
+        ram_start = min(ram_start, bank->start);
+        ram_end = max(ram_end, bank_end);
 
-        setup_xenheap_mappings(bank_start>>PAGE_SHIFT, bank_size>>PAGE_SHIFT);
-
-        s = bank_start;
-        while ( s < bank_end )
-        {
-            paddr_t n = bank_end;
-
-            e = next_module(s, &n);
-
-            if ( e == ~(paddr_t)0 )
-            {
-                e = n = bank_end;
-            }
-
-            if ( e > bank_end )
-                e = bank_end;
-
-            fw_unreserved_regions(s, e, init_boot_pages, 0);
-            s = n;
-        }
+        setup_xenheap_mappings(PFN_DOWN(bank->start),
+                               PFN_DOWN(bank->size));
     }
 
     total_pages += ram_size >> PAGE_SHIFT;
@@ -862,11 +893,10 @@ void __init start_xen(unsigned long boot_phys_offset,
                       unsigned long fdt_paddr)
 {
     size_t fdt_size;
-    int cpus, i;
     const char *cmdline;
     struct bootmodule *xen_bootmodule;
     struct domain *d;
-    int rc;
+    int rc, i;
 
     dcache_line_bytes = read_dcache_line_bytes();
 
@@ -942,15 +972,16 @@ void __init start_xen(unsigned long boot_phys_offset,
     processor_id();
 
     smp_init_cpus();
-    cpus = smp_get_max_cpus();
-    printk(XENLOG_INFO "SMP: Allowing %u CPUs\n", cpus);
-    nr_cpu_ids = cpus;
+    nr_cpu_ids = smp_get_max_cpus();
+    printk(XENLOG_INFO "SMP: Allowing %u CPUs\n", nr_cpu_ids);
 
     /*
      * Some errata relies on SMCCC version which is detected by psci_init()
      * (called from smp_init_cpus()).
      */
     check_local_cpu_errata();
+
+    check_local_cpu_features();
 
     init_xen_time();
 
@@ -988,7 +1019,7 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     for_each_present_cpu ( i )
     {
-        if ( (num_online_cpus() < cpus) && !cpu_online(i) )
+        if ( (num_online_cpus() < nr_cpu_ids) && !cpu_online(i) )
         {
             int ret = cpu_up(i);
             if ( ret != 0 )
@@ -1021,6 +1052,7 @@ void __init start_xen(unsigned long boot_phys_offset,
      */
     apply_alternatives_all();
     enable_errata_workarounds();
+    enable_cpu_features();
 
     /* Create initial domain 0. */
     if ( !is_dom0less_mode() )
@@ -1047,6 +1079,9 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     /* Hide UART from DOM0 if we're using it */
     serial_endboot();
+
+    if ( (rc = xsm_set_system_active()) != 0 )
+        panic("xsm: unable to switch to SYSTEM_ACTIVE privilege: %d\n", rc);
 
     system_state = SYS_STATE_active;
 

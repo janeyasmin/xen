@@ -2065,7 +2065,10 @@ void corrupt(struct connection *conn, const char *fmt, ...)
 	va_end(arglist);
 
 	log("corruption detected by connection %i: err %s: %s",
-	    conn ? (int)conn->id : -1, strerror(saved_errno), str);
+	    conn ? (int)conn->id : -1, strerror(saved_errno),
+	    str ?: "ENOMEM");
+
+	talloc_free(str);
 
 	check_store();
 }
@@ -2368,16 +2371,8 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		next = list_entry(connections.next, typeof(*conn), list);
-		if (&next->list != &connections)
-			talloc_increase_ref_count(next);
-		while (&next->list != &connections) {
-			conn = next;
-
-			next = list_entry(conn->list.next,
-					  typeof(*conn), list);
-			if (&next->list != &connections)
-				talloc_increase_ref_count(next);
+		list_for_each_entry_safe(conn, next, &connections, list) {
+			talloc_increase_ref_count(conn);
 
 			if (conn_can_read(conn))
 				handle_input(conn);

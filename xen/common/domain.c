@@ -567,6 +567,9 @@ struct domain *domain_create(domid_t domid,
     /* Sort out our idea of is_system_domain(). */
     d->domain_id = domid;
 
+    /* Holding CDF_* internal flags. */
+    d->cdf = flags;
+
     /* Debug sanity. */
     ASSERT(is_system_domain(d) ? config == NULL : config != NULL);
 
@@ -1446,7 +1449,7 @@ int vcpu_reset(struct vcpu *v)
  * of memory, and it sets a pending event to make sure that a pending
  * event doesn't get missed.
  */
-int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned offset)
+int map_vcpu_info(struct vcpu *v, unsigned long gfn, unsigned int offset)
 {
     struct domain *d = v->domain;
     void *mapping;
@@ -1569,15 +1572,11 @@ int default_initialise_vcpu(struct vcpu *v, XEN_GUEST_HANDLE_PARAM(void) arg)
     return rc;
 }
 
-long cf_check do_vcpu_op(
-    int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
+long common_vcpu_op(int cmd, struct vcpu *v, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
-    struct domain *d = current->domain;
-    struct vcpu *v;
     long rc = 0;
-
-    if ( (v = domain_vcpu(d, vcpuid)) == NULL )
-        return -ENOENT;
+    struct domain *d = v->domain;
+    unsigned int vcpuid = v->vcpu_id;
 
     switch ( cmd )
     {
@@ -1749,7 +1748,7 @@ long cf_check do_vcpu_op(
     }
 
     default:
-        rc = arch_do_vcpu_op(cmd, v, arg);
+        rc = -ENOSYS;
         break;
     }
 
@@ -1757,7 +1756,7 @@ long cf_check do_vcpu_op(
 }
 
 #ifdef arch_vm_assist_valid_mask
-long cf_check do_vm_assist(unsigned int cmd, unsigned int type)
+long do_vm_assist(unsigned int cmd, unsigned int type)
 {
     struct domain *currd = current->domain;
     const unsigned long valid = arch_vm_assist_valid_mask(currd);

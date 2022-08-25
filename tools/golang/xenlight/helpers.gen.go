@@ -1120,6 +1120,12 @@ x.ArchArm.Vuart = VuartType(xc.arch_arm.vuart)
 if err := x.ArchX86.MsrRelaxed.fromC(&xc.arch_x86.msr_relaxed);err != nil {
 return fmt.Errorf("converting field ArchX86.MsrRelaxed: %v", err)
 }
+if err := x.ArchX86.AssistedXapic.fromC(&xc.arch_x86.assisted_xapic);err != nil {
+return fmt.Errorf("converting field ArchX86.AssistedXapic: %v", err)
+}
+if err := x.ArchX86.AssistedX2Apic.fromC(&xc.arch_x86.assisted_x2apic);err != nil {
+return fmt.Errorf("converting field ArchX86.AssistedX2Apic: %v", err)
+}
 x.Altp2M = Altp2MMode(xc.altp2m)
 x.VmtraceBufKb = int(xc.vmtrace_buf_kb)
 if err := x.Vpmu.fromC(&xc.vpmu);err != nil {
@@ -1605,6 +1611,12 @@ xc.arch_arm.vuart = C.libxl_vuart_type(x.ArchArm.Vuart)
 if err := x.ArchX86.MsrRelaxed.toC(&xc.arch_x86.msr_relaxed); err != nil {
 return fmt.Errorf("converting field ArchX86.MsrRelaxed: %v", err)
 }
+if err := x.ArchX86.AssistedXapic.toC(&xc.arch_x86.assisted_xapic); err != nil {
+return fmt.Errorf("converting field ArchX86.AssistedXapic: %v", err)
+}
+if err := x.ArchX86.AssistedX2Apic.toC(&xc.arch_x86.assisted_x2apic); err != nil {
+return fmt.Errorf("converting field ArchX86.AssistedX2Apic: %v", err)
+}
 xc.altp2m = C.libxl_altp2m_mode(x.Altp2M)
 xc.vmtrace_buf_kb = C.int(x.VmtraceBufKb)
 if err := x.Vpmu.toC(&xc.vpmu); err != nil {
@@ -1751,6 +1763,10 @@ x.DirectIoSafe = bool(xc.direct_io_safe)
 if err := x.DiscardEnable.fromC(&xc.discard_enable);err != nil {
 return fmt.Errorf("converting field DiscardEnable: %v", err)
 }
+x.Specification = DiskSpecification(xc.specification)
+x.Transport = DiskTransport(xc.transport)
+x.Irq = uint32(xc.irq)
+x.Base = uint64(xc.base)
 if err := x.ColoEnable.fromC(&xc.colo_enable);err != nil {
 return fmt.Errorf("converting field ColoEnable: %v", err)
 }
@@ -1762,6 +1778,9 @@ x.ColoPort = int(xc.colo_port)
 x.ColoExport = C.GoString(xc.colo_export)
 x.ActiveDisk = C.GoString(xc.active_disk)
 x.HiddenDisk = C.GoString(xc.hidden_disk)
+if err := x.Trusted.fromC(&xc.trusted);err != nil {
+return fmt.Errorf("converting field Trusted: %v", err)
+}
 
  return nil}
 
@@ -1788,6 +1807,10 @@ xc.direct_io_safe = C.bool(x.DirectIoSafe)
 if err := x.DiscardEnable.toC(&xc.discard_enable); err != nil {
 return fmt.Errorf("converting field DiscardEnable: %v", err)
 }
+xc.specification = C.libxl_disk_specification(x.Specification)
+xc.transport = C.libxl_disk_transport(x.Transport)
+xc.irq = C.uint32_t(x.Irq)
+xc.base = C.uint64_t(x.Base)
 if err := x.ColoEnable.toC(&xc.colo_enable); err != nil {
 return fmt.Errorf("converting field ColoEnable: %v", err)
 }
@@ -1803,6 +1826,9 @@ if x.ActiveDisk != "" {
 xc.active_disk = C.CString(x.ActiveDisk)}
 if x.HiddenDisk != "" {
 xc.hidden_disk = C.CString(x.HiddenDisk)}
+if err := x.Trusted.toC(&xc.trusted); err != nil {
+return fmt.Errorf("converting field Trusted: %v", err)
+}
 
  return nil
  }
@@ -1887,6 +1913,9 @@ x.ColoFilterSecRedirector1Outdev = C.GoString(xc.colo_filter_sec_redirector1_out
 x.ColoFilterSecRewriter0Queue = C.GoString(xc.colo_filter_sec_rewriter0_queue)
 x.ColoCheckpointHost = C.GoString(xc.colo_checkpoint_host)
 x.ColoCheckpointPort = C.GoString(xc.colo_checkpoint_port)
+if err := x.Trusted.fromC(&xc.trusted);err != nil {
+return fmt.Errorf("converting field Trusted: %v", err)
+}
 
  return nil}
 
@@ -2016,6 +2045,9 @@ if x.ColoCheckpointHost != "" {
 xc.colo_checkpoint_host = C.CString(x.ColoCheckpointHost)}
 if x.ColoCheckpointPort != "" {
 xc.colo_checkpoint_port = C.CString(x.ColoCheckpointPort)}
+if err := x.Trusted.toC(&xc.trusted); err != nil {
+return fmt.Errorf("converting field Trusted: %v", err)
+}
 
  return nil
  }
@@ -3373,6 +3405,8 @@ x.CapVmtrace = bool(xc.cap_vmtrace)
 x.CapVpmu = bool(xc.cap_vpmu)
 x.CapGnttabV1 = bool(xc.cap_gnttab_v1)
 x.CapGnttabV2 = bool(xc.cap_gnttab_v2)
+x.CapAssistedXapic = bool(xc.cap_assisted_xapic)
+x.CapAssistedX2Apic = bool(xc.cap_assisted_x2apic)
 
  return nil}
 
@@ -3407,6 +3441,8 @@ xc.cap_vmtrace = C.bool(x.CapVmtrace)
 xc.cap_vpmu = C.bool(x.CapVpmu)
 xc.cap_gnttab_v1 = C.bool(x.CapGnttabV1)
 xc.cap_gnttab_v2 = C.bool(x.CapGnttabV2)
+xc.cap_assisted_xapic = C.bool(x.CapAssistedXapic)
+xc.cap_assisted_x2apic = C.bool(x.CapAssistedX2Apic)
 
  return nil
  }

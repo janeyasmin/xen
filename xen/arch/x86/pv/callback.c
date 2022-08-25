@@ -140,7 +140,7 @@ static long unregister_guest_callback(struct callback_unregister *unreg)
     return ret;
 }
 
-long cf_check do_callback_op(int cmd, XEN_GUEST_HANDLE_PARAM(const_void) arg)
+long do_callback_op(int cmd, XEN_GUEST_HANDLE_PARAM(const_void) arg)
 {
     long ret;
 
@@ -178,7 +178,7 @@ long cf_check do_callback_op(int cmd, XEN_GUEST_HANDLE_PARAM(const_void) arg)
     return ret;
 }
 
-long cf_check do_set_callbacks(
+long do_set_callbacks(
     unsigned long event_address, unsigned long failsafe_address,
     unsigned long syscall_address)
 {
@@ -207,9 +207,9 @@ long cf_check do_set_callbacks(
 #include <compat/callback.h>
 #include <compat/nmi.h>
 
-static long compat_register_guest_callback(struct compat_callback_register *reg)
+static int compat_register_guest_callback(struct compat_callback_register *reg)
 {
-    long ret = 0;
+    int ret = 0;
     struct vcpu *curr = current;
 
     fixup_guest_code_selector(curr->domain, reg->address.cs);
@@ -256,10 +256,10 @@ static long compat_register_guest_callback(struct compat_callback_register *reg)
     return ret;
 }
 
-static long compat_unregister_guest_callback(
+static int compat_unregister_guest_callback(
     struct compat_callback_unregister *unreg)
 {
-    long ret;
+    int ret;
 
     switch ( unreg->type )
     {
@@ -283,9 +283,9 @@ static long compat_unregister_guest_callback(
     return ret;
 }
 
-long cf_check compat_callback_op(int cmd, XEN_GUEST_HANDLE(void) arg)
+int compat_callback_op(int cmd, XEN_GUEST_HANDLE(const_void) arg)
 {
-    long ret;
+    int ret;
 
     switch ( cmd )
     {
@@ -321,7 +321,7 @@ long cf_check compat_callback_op(int cmd, XEN_GUEST_HANDLE(void) arg)
     return ret;
 }
 
-long cf_check compat_set_callbacks(
+int compat_set_callbacks(
     unsigned long event_selector, unsigned long event_address,
     unsigned long failsafe_selector, unsigned long failsafe_address)
 {
@@ -348,7 +348,7 @@ long cf_check compat_set_callbacks(
 
 #endif /* CONFIG_PV32 */
 
-long cf_check do_set_trap_table(XEN_GUEST_HANDLE_PARAM(const_trap_info_t) traps)
+long do_set_trap_table(XEN_GUEST_HANDLE_PARAM(const_trap_info_t) traps)
 {
     struct trap_info cur;
     struct vcpu *curr = current;
@@ -394,7 +394,7 @@ long cf_check do_set_trap_table(XEN_GUEST_HANDLE_PARAM(const_trap_info_t) traps)
 }
 
 #ifdef CONFIG_PV32
-int cf_check compat_set_trap_table(XEN_GUEST_HANDLE(trap_info_compat_t) traps)
+int compat_set_trap_table(XEN_GUEST_HANDLE(trap_info_compat_t) traps)
 {
     struct vcpu *curr = current;
     struct compat_trap_info cur;
@@ -437,7 +437,7 @@ int cf_check compat_set_trap_table(XEN_GUEST_HANDLE(trap_info_compat_t) traps)
 }
 #endif
 
-long cf_check do_nmi_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+long do_nmi_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct xennmi_callback cb;
     long rc = 0;
@@ -463,7 +463,7 @@ long cf_check do_nmi_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 }
 
 #ifdef CONFIG_PV32
-int cf_check compat_nmi_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
+int compat_nmi_op(unsigned int cmd, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     struct compat_nmi_callback cb;
     int rc = 0;

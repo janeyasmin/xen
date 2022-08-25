@@ -3376,16 +3376,11 @@ static void vmx_install_vlapic_mapping(struct vcpu *v)
 
 void vmx_vlapic_msr_changed(struct vcpu *v)
 {
-    int virtualize_x2apic_mode;
     struct vlapic *vlapic = vcpu_vlapic(v);
     unsigned int msr;
 
-    virtualize_x2apic_mode = ( (cpu_has_vmx_apic_reg_virt ||
-                                cpu_has_vmx_virtual_intr_delivery) &&
-                               cpu_has_vmx_virtualize_x2apic_mode );
-
-    if ( !cpu_has_vmx_virtualize_apic_accesses &&
-         !virtualize_x2apic_mode )
+    if ( !has_assisted_xapic(v->domain) &&
+         !has_assisted_x2apic(v->domain) )
         return;
 
     vmx_vmcs_enter(v);
@@ -3395,14 +3390,14 @@ void vmx_vlapic_msr_changed(struct vcpu *v)
     if ( !vlapic_hw_disabled(vlapic) &&
          (vlapic_base_address(vlapic) == APIC_DEFAULT_PHYS_BASE) )
     {
-        if ( virtualize_x2apic_mode && vlapic_x2apic_mode(vlapic) )
+        if ( has_assisted_x2apic(v->domain) && vlapic_x2apic_mode(vlapic) )
         {
             v->arch.hvm.vmx.secondary_exec_control |=
                 SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE;
             if ( cpu_has_vmx_apic_reg_virt )
             {
                 for ( msr = MSR_X2APIC_FIRST;
-                      msr <= MSR_X2APIC_FIRST + 0xff; msr++ )
+                      msr <= MSR_X2APIC_LAST; msr++ )
                     vmx_clear_msr_intercept(v, msr, VMX_MSR_R);
 
                 vmx_set_msr_intercept(v, MSR_X2APIC_PPR, VMX_MSR_R);
@@ -3416,14 +3411,14 @@ void vmx_vlapic_msr_changed(struct vcpu *v)
                 vmx_clear_msr_intercept(v, MSR_X2APIC_SELF, VMX_MSR_W);
             }
         }
-        else
+        else if ( has_assisted_xapic(v->domain) )
             v->arch.hvm.vmx.secondary_exec_control |=
                 SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES;
     }
     if ( !(v->arch.hvm.vmx.secondary_exec_control &
            SECONDARY_EXEC_VIRTUALIZE_X2APIC_MODE) )
         for ( msr = MSR_X2APIC_FIRST;
-              msr <= MSR_X2APIC_FIRST + 0xff; msr++ )
+              msr <= MSR_X2APIC_LAST; msr++ )
             vmx_set_msr_intercept(v, msr, VMX_MSR_RW);
 
     vmx_update_secondary_exec_control(v);
@@ -4038,6 +4033,18 @@ void vmx_vmexit_handler(struct cpu_user_regs *regs)
             vcpu_altp2m(v).p2midx = idx;
             atomic_inc(&p2m_get_altp2m(v)->active_vcpus);
         }
+    }
+
+    if ( unlikely(currd->arch.monitor.vmexit_enabled) )
+    {
+        int rc;
+
+        __vmread(EXIT_QUALIFICATION, &exit_qualification);
+        rc = hvm_monitor_vmexit(exit_reason, exit_qualification);
+        if ( rc < 0 )
+            goto exit_and_crash;
+        if ( rc )
+            return;
     }
 
     /* XXX: This looks ugly, but we need a mechanism to ensure
