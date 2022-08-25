@@ -774,14 +774,31 @@ static void __init setup_mm(void)
            opt_xenheap_megabytes ? ", from command-line" : "");
     printk("Dom heap: %lu pages\n", domheap_pages);
 
-    setup_xenheap_mappings((e >> PAGE_SHIFT) - xenheap_pages, xenheap_pages);
+    /*
+     * We need some memory to allocate the page-tables used for the
+     * xenheap mappings. So populate the boot allocator first.
+     *
+     * This requires us to set xenheap_mfn_{start, end} first so the Xenheap
+     * region can be avoided.
+     */
+    xenheap_mfn_start = _mfn((e >> PAGE_SHIFT) - xenheap_pages);
+    xenheap_mfn_end = mfn_add(xenheap_mfn_start, xenheap_pages);
 
-    /* Add non-xenheap memory */
     populate_boot_allocator();
+
+    setup_xenheap_mappings(mfn_x(xenheap_mfn_start), xenheap_pages);
 
     /* Frame table covers all of RAM region, including holes */
     setup_frametable_mappings(ram_start, ram_end);
     max_page = PFN_DOWN(ram_end);
+
+    /*
+     * The allocators may need to use map_domain_page() (such as for
+     * scrubbing pages). So we need to prepare the domheap area first.
+     */
+    if ( !init_domheap_mappings(smp_processor_id()) )
+        panic("CPU%u: Unable to prepare the domheap page-tables\n",
+              smp_processor_id());
 
     /* Add xenheap memory that was not already added to the boot allocator. */
     init_xenheap_pages(mfn_to_maddr(xenheap_mfn_start),
@@ -1062,6 +1079,9 @@ void __init start_xen(unsigned long boot_phys_offset,
 
     /* Hide UART from DOM0 if we're using it */
     serial_endboot();
+
+    if ( (rc = xsm_set_system_active()) != 0 )
+        panic("xsm: unable to switch to SYSTEM_ACTIVE privilege: %d\n", rc);
 
     system_state = SYS_STATE_active;
 

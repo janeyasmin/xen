@@ -132,7 +132,7 @@ extern bool untrusted_msi;
 int pi_update_irte(const struct pi_desc *pi_desc, const struct pirq *pirq,
                    const uint8_t gvec);
 
-extern bool iommu_non_coherent;
+extern bool iommu_non_coherent, iommu_superpages;
 
 static inline void iommu_sync_cache(const void *addr, unsigned int size)
 {
@@ -146,7 +146,9 @@ void iommu_free_domid(domid_t domid, unsigned long *map);
 
 int __must_check iommu_free_pgtables(struct domain *d);
 struct domain_iommu;
-struct page_info *__must_check iommu_alloc_pgtable(struct domain_iommu *hd);
+struct page_info *__must_check iommu_alloc_pgtable(struct domain_iommu *hd,
+                                                   uint64_t contig_mask);
+void iommu_queue_free_pgtable(struct domain_iommu *hd, struct page_info *pg);
 
 #endif /* !__ARCH_X86_IOMMU_H__ */
 /*

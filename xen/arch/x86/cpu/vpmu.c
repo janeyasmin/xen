@@ -336,7 +336,19 @@ void vpmu_do_interrupt(struct cpu_user_regs *regs)
 #endif
 }
 
-static void cf_check vpmu_save_force(void *arg)
+#ifdef CONFIG_MEM_SHARING
+int vpmu_allocate_context(struct vcpu *v)
+{
+    struct vpmu_struct *vpmu = vcpu_vpmu(v);
+
+    if ( vpmu_is_set(vpmu, VPMU_CONTEXT_ALLOCATED) )
+        return 0;
+
+    return alternative_call(vpmu_ops.allocate_context, v) ? 0 : -ENOMEM;
+}
+#endif
+
+void cf_check vpmu_save_force(void *arg)
 {
     struct vcpu *v = arg;
     struct vpmu_struct *vpmu = vcpu_vpmu(v);
@@ -672,7 +684,7 @@ void vpmu_dump(struct vcpu *v)
         alternative_vcall(vpmu_ops.arch_vpmu_dump, v);
 }
 
-long cf_check do_xenpmu_op(
+long do_xenpmu_op(
     unsigned int op, XEN_GUEST_HANDLE_PARAM(xen_pmu_params_t) arg)
 {
     int ret;

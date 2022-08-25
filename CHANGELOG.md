@@ -10,6 +10,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
  - On x86 "vga=current" can now be used together with GrUB2's gfxpayload setting. Note that
    this requires use of "multiboot2" (and "module2") as the GrUB commands loading Xen.
 
+### Added / support upgraded
+ - IOMMU superpage support on x86, affecting PV guests as well as HVM/PVH ones
+   when they don't share page tables with the CPU (HAP / EPT / NPT).
+ - Support VIRT_SSBD feature for HVM guests on AMD.
+
 ### Removed / support downgraded
  - dropped support for the (x86-only) "vesa-mtrr" and "vesa-remap" command line options
 

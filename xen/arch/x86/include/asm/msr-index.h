@@ -84,6 +84,7 @@
 #define  ARCH_CAPS_FB_CLEAR_CTRL            (_AC(1, ULL) << 18)
 #define  ARCH_CAPS_RRSBA                    (_AC(1, ULL) << 19)
 #define  ARCH_CAPS_BHI_NO                   (_AC(1, ULL) << 20)
+#define  ARCH_CAPS_PBRSB_NO                 (_AC(1, ULL) << 24)
 
 #define MSR_FLUSH_CMD                       0x0000010b
 #define  FLUSH_CMD_L1D                      (_AC(1, ULL) <<  0)
@@ -148,7 +149,7 @@
 #define MSR_INTERRUPT_SSP_TABLE             0x000006a8
 
 #define MSR_X2APIC_FIRST                    0x00000800
-#define MSR_X2APIC_LAST                     0x00000bff
+#define MSR_X2APIC_LAST                     0x000008ff
 
 #define MSR_X2APIC_TPR                      0x00000808
 #define MSR_X2APIC_PPR                      0x0000080a
@@ -377,6 +378,7 @@
 #define MSR_AMD64_DE_CFG		0xc0011029
 #define AMD64_DE_CFG_LFENCE_SERIALISE	(_AC(1, ULL) << 1)
 #define MSR_AMD64_EX_CFG		0xc001102c
+#define MSR_AMD64_DE_CFG2		0xc00110e3
 
 #define MSR_AMD64_DR0_ADDRESS_MASK	0xc0011027
 #define MSR_AMD64_DR1_ADDRESS_MASK	0xc0011019

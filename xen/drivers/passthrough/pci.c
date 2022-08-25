@@ -576,48 +576,18 @@ int __init pci_ro_device(int seg, int bus, int devfn)
     return 0;
 }
 
-struct pci_dev *pci_get_pdev(int seg, int bus, int devfn)
-{
-    struct pci_seg *pseg = get_pseg(seg);
-    struct pci_dev *pdev = NULL;
-
-    ASSERT(pcidevs_locked());
-    ASSERT(seg != -1 || bus == -1);
-    ASSERT(bus != -1 || devfn == -1);
-
-    if ( !pseg )
-    {
-        if ( seg == -1 )
-            radix_tree_gang_lookup(&pci_segments, (void **)&pseg, 0, 1);
-        if ( !pseg )
-            return NULL;
-    }
-
-    do {
-        list_for_each_entry ( pdev, &pseg->alldevs_list, alldevs_list )
-            if ( (pdev->bus == bus || bus == -1) &&
-                 (pdev->devfn == devfn || devfn == -1) )
-                return pdev;
-    } while ( radix_tree_gang_lookup(&pci_segments, (void **)&pseg,
-                                     pseg->nr + 1, 1) );
-
-    return NULL;
-}
-
-struct pci_dev *pci_get_real_pdev(int seg, int bus, int devfn)
+struct pci_dev *pci_get_real_pdev(pci_sbdf_t sbdf)
 {
     struct pci_dev *pdev;
     int stride;
 
-    if ( seg < 0 || bus < 0 || devfn < 0 )
-        return NULL;
-
-    for ( pdev = pci_get_pdev(seg, bus, devfn), stride = 4;
+    for ( pdev = pci_get_pdev(NULL, sbdf), stride = 4;
           !pdev && stride; stride >>= 1 )
     {
-        if ( !(devfn & (8 - stride)) )
+        if ( !(sbdf.devfn & stride) )
             continue;
-        pdev = pci_get_pdev(seg, bus, devfn & ~(8 - stride));
+        sbdf.devfn &= ~stride;
+        pdev = pci_get_pdev(NULL, sbdf);
         if ( pdev && stride != pdev->phantom_stride )
             pdev = NULL;
     }
@@ -625,31 +595,34 @@ struct pci_dev *pci_get_real_pdev(int seg, int bus, int devfn)
     return pdev;
 }
 
-struct pci_dev *pci_get_pdev_by_domain(const struct domain *d, int seg,
-                                       int bus, int devfn)
+struct pci_dev *pci_get_pdev(const struct domain *d, pci_sbdf_t sbdf)
 {
-    struct pci_seg *pseg = get_pseg(seg);
-    struct pci_dev *pdev = NULL;
+    struct pci_dev *pdev;
 
-    ASSERT(seg != -1 || bus == -1);
-    ASSERT(bus != -1 || devfn == -1);
+    ASSERT(d || pcidevs_locked());
 
-    if ( !pseg )
+    /*
+     * The hardware domain owns the majority of the devices in the system.
+     * When there are multiple segments, traversing the per-segment list is
+     * likely going to be faster, whereas for a single segment the difference
+     * shouldn't be that large.
+     */
+    if ( !d || is_hardware_domain(d) )
     {
-        if ( seg == -1 )
-            radix_tree_gang_lookup(&pci_segments, (void **)&pseg, 0, 1);
+        const struct pci_seg *pseg = get_pseg(sbdf.seg);
+
         if ( !pseg )
             return NULL;
-    }
 
-    do {
         list_for_each_entry ( pdev, &pseg->alldevs_list, alldevs_list )
-            if ( (pdev->bus == bus || bus == -1) &&
-                 (pdev->devfn == devfn || devfn == -1) &&
-                 (pdev->domain == d) )
+            if ( pdev->sbdf.bdf == sbdf.bdf &&
+                 (!d || pdev->domain == d) )
                 return pdev;
-    } while ( radix_tree_gang_lookup(&pci_segments, (void **)&pseg,
-                                     pseg->nr + 1, 1) );
+    }
+    else
+        list_for_each_entry ( pdev, &d->pdev_list, domain_list )
+            if ( pdev->sbdf.bdf == sbdf.bdf )
+                return pdev;
 
     return NULL;
 }
@@ -755,7 +728,9 @@ int pci_add_device(u16 seg, u8 bus, u8 devfn,
     else if ( info->is_virtfn )
     {
         pcidevs_lock();
-        pdev = pci_get_pdev(seg, info->physfn.bus, info->physfn.devfn);
+        pdev = pci_get_pdev(NULL,
+                            PCI_SBDF(seg, info->physfn.bus,
+                                     info->physfn.devfn));
         if ( pdev )
             pf_is_extfn = pdev->info.is_extfn;
         pcidevs_unlock();
@@ -933,7 +908,7 @@ static int deassign_device(struct domain *d, uint16_t seg, uint8_t bus,
         return -EINVAL;
 
     ASSERT(pcidevs_locked());
-    pdev = pci_get_pdev_by_domain(d, seg, bus, devfn);
+    pdev = pci_get_pdev(d, PCI_SBDF(seg, bus, devfn));
     if ( !pdev )
         return -ENODEV;
 
@@ -1097,7 +1072,7 @@ void pci_check_disable_device(u16 seg, u8 bus, u8 devfn)
     u16 cword;
 
     pcidevs_lock();
-    pdev = pci_get_real_pdev(seg, bus, devfn);
+    pdev = pci_get_real_pdev(PCI_SBDF(seg, bus, devfn));
     if ( pdev )
     {
         if ( now < pdev->fault.time ||
@@ -1210,7 +1185,8 @@ static int __hwdom_init cf_check _setup_hwdom_pci_devices(
     {
         for ( devfn = 0; devfn < 256; devfn++ )
         {
-            struct pci_dev *pdev = pci_get_pdev(pseg->nr, bus, devfn);
+            struct pci_dev *pdev = pci_get_pdev(NULL,
+                                                PCI_SBDF(pseg->nr, bus, devfn));
 
             if ( !pdev )
                 continue;
@@ -1484,7 +1460,7 @@ static int device_assigned(u16 seg, u8 bus, u8 devfn)
     int rc = 0;
 
     ASSERT(pcidevs_locked());
-    pdev = pci_get_pdev(seg, bus, devfn);
+    pdev = pci_get_pdev(NULL, PCI_SBDF(seg, bus, devfn));
 
     if ( !pdev )
         rc = -ENODEV;
@@ -1515,7 +1491,7 @@ static int assign_device(struct domain *d, u16 seg, u8 bus, u8 devfn, u32 flag)
 
     /* device_assigned() should already have cleared the device for assignment */
     ASSERT(pcidevs_locked());
-    pdev = pci_get_pdev(seg, bus, devfn);
+    pdev = pci_get_pdev(NULL, PCI_SBDF(seg, bus, devfn));
     ASSERT(pdev && (pdev->domain == hardware_domain ||
                     pdev->domain == dom_io));
 

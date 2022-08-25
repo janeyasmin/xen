@@ -29,7 +29,7 @@
 #include <xen/livepatch.h>
 #include <xen/coverage.h>
 
-long cf_check do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
+long do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
 {
     long ret = 0;
     int copyback = -1;
@@ -447,7 +447,7 @@ long cf_check do_sysctl(XEN_GUEST_HANDLE_PARAM(xen_sysctl_t) u_sysctl)
             }
 
             pcidevs_lock();
-            pdev = pci_get_pdev(dev.seg, dev.bus, dev.devfn);
+            pdev = pci_get_pdev(NULL, PCI_SBDF(dev.seg, dev.bus, dev.devfn));
             if ( !pdev )
                 node = XEN_INVALID_DEV;
             else if ( pdev->node == NUMA_NO_NODE )

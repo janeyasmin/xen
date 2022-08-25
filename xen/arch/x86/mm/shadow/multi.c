@@ -132,7 +132,13 @@ delete_fl1_shadow_status(struct domain *d, gfn_t gfn, mfn_t smfn)
     SHADOW_PRINTK("gfn=%"SH_PRI_gfn", type=%08x, smfn=%"PRI_mfn"\n",
                    gfn_x(gfn), SH_type_fl1_shadow, mfn_x(smfn));
     ASSERT(mfn_to_page(smfn)->u.sh.head);
-    shadow_hash_delete(d, gfn_x(gfn), SH_type_fl1_shadow, smfn);
+    if ( !shadow_hash_delete(d, gfn_x(gfn), SH_type_fl1_shadow, smfn) )
+    {
+        printk(XENLOG_G_ERR
+               "%pd: %"PRI_gfn":FL1 hash entry not found for %"PRI_mfn"\n",
+               d, gfn_x(gfn), mfn_x(smfn));
+        domain_crash(d);
+    }
 }
 
 
@@ -2631,7 +2637,7 @@ static int cf_check sh_page_fault(
         SHADOW_PRINTK("user-mode fault to PT, unshadowing mfn %#lx\n",
                       mfn_x(gmfn));
         perfc_incr(shadow_fault_emulate_failed);
-        sh_remove_shadows(d, gmfn, 0 /* thorough */, 1 /* must succeed */);
+        shadow_remove_all_shadows(d, gmfn);
         trace_shadow_emulate_other(TRC_SHADOW_EMULATE_UNSHADOW_USER,
                                       va, gfn);
         goto done;
@@ -2717,7 +2723,7 @@ static int cf_check sh_page_fault(
             v->arch.paging.last_write_emul_ok = 0;
         }
 #endif
-        sh_remove_shadows(d, gmfn, 0 /* thorough */, 1 /* must succeed */);
+        shadow_remove_all_shadows(d, gmfn);
         trace_shadow_emulate_other(TRC_SHADOW_EMULATE_UNSHADOW_EVTINJ,
                                    va, gfn);
         return EXCRET_fault_fixed;
@@ -3227,7 +3233,7 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
 {
     struct domain *d = v->domain;
     mfn_t gmfn;
-#if GUEST_PAGING_LEVELS == 3 && defined(CONFIG_HVM)
+#if GUEST_PAGING_LEVELS == 3
     const guest_l3e_t *gl3e;
     unsigned int i, guest_idx;
 #endif
@@ -3278,7 +3284,7 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
 #endif
         gmfn = pagetable_get_mfn(v->arch.guest_table);
 
-#if GUEST_PAGING_LEVELS == 3 && defined(CONFIG_HVM)
+#if GUEST_PAGING_LEVELS == 3
     /*
      * On PAE guests we don't use a mapping of the guest's own top-level
      * table.  We cache the current state of that table and shadow that,
@@ -3320,8 +3326,6 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
                   !VM_ASSIST(d, m2p_strict) )
             fill_ro_mpt(smfn);
     }
-#elif !defined(CONFIG_HVM)
-    ASSERT_UNREACHABLE();
 #elif GUEST_PAGING_LEVELS == 3
     /* PAE guests have four shadow_table entries, based on the
      * current values of the guest's four l3es. */
@@ -3372,8 +3376,6 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
 #error This should never happen
 #endif
 
-
-#ifdef CONFIG_HVM
     ///
     /// v->arch.paging.shadow.l3table
     ///
@@ -3399,7 +3401,6 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
             }
         }
 #endif /* SHADOW_PAGING_LEVELS == 3 */
-#endif /* CONFIG_HVM */
 
     ///
     /// v->arch.cr3
@@ -3418,8 +3419,6 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
     }
 #endif
 
-
-#ifdef CONFIG_HVM
     ///
     /// v->arch.hvm.hw_cr[3]
     ///
@@ -3436,7 +3435,6 @@ static void cf_check sh_update_cr3(struct vcpu *v, int do_locking, bool noflush)
 #endif
         hvm_update_guest_cr3(v, noflush);
     }
-#endif /* CONFIG_HVM */
 
     /* Fix up the linear pagetable mappings */
     sh_update_linear_entries(v);

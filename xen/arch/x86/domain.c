@@ -50,6 +50,7 @@
 #include <asm/cpuidle.h>
 #include <asm/mpspec.h>
 #include <asm/ldt.h>
+#include <asm/hvm/domain.h>
 #include <asm/hvm/hvm.h>
 #include <asm/hvm/nestedhvm.h>
 #include <asm/hvm/support.h>
@@ -619,6 +620,8 @@ int arch_sanitise_domain_config(struct xen_domctl_createdomain *config)
     bool hvm = config->flags & XEN_DOMCTL_CDF_hvm;
     bool hap = config->flags & XEN_DOMCTL_CDF_hap;
     bool nested_virt = config->flags & XEN_DOMCTL_CDF_nested_virt;
+    bool assisted_xapic = config->arch.misc_flags & XEN_X86_ASSISTED_XAPIC;
+    bool assisted_x2apic = config->arch.misc_flags & XEN_X86_ASSISTED_X2APIC;
     unsigned int max_vcpus;
 
     if ( hvm ? !hvm_enabled : !IS_ENABLED(CONFIG_PV) )
@@ -685,11 +688,29 @@ int arch_sanitise_domain_config(struct xen_domctl_createdomain *config)
         }
     }
 
-    if ( config->arch.misc_flags & ~XEN_X86_MSR_RELAXED )
+    if ( config->arch.misc_flags & ~(XEN_X86_MSR_RELAXED |
+                                     XEN_X86_ASSISTED_XAPIC |
+                                     XEN_X86_ASSISTED_X2APIC) )
     {
         dprintk(XENLOG_INFO, "Invalid arch misc flags %#x\n",
                 config->arch.misc_flags);
         return -EINVAL;
+    }
+
+    if ( (assisted_xapic || assisted_x2apic) && !hvm )
+    {
+        dprintk(XENLOG_INFO,
+                "Interrupt Controller Virtualization not supported for PV\n");
+        return -EINVAL;
+    }
+
+    if ( (assisted_xapic && !assisted_xapic_available) ||
+         (assisted_x2apic && !assisted_x2apic_available) )
+    {
+        dprintk(XENLOG_INFO,
+                "Hardware assisted x%sAPIC requested but not available\n",
+                assisted_xapic && !assisted_xapic_available ? "" : "2");
+        return -ENODEV;
     }
 
     return 0;
@@ -832,7 +853,7 @@ int arch_domain_create(struct domain *d,
 
     if ( is_hvm_domain(d) )
     {
-        if ( (rc = hvm_domain_initialise(d)) != 0 )
+        if ( (rc = hvm_domain_initialise(d, config)) != 0 )
             goto fail;
     }
     else if ( is_pv_domain(d) )
@@ -940,7 +961,7 @@ int arch_domain_soft_reset(struct domain *d)
     if ( !is_hvm_domain(d) )
         return -EINVAL;
 
-    spin_lock(&d->event_lock);
+    write_lock(&d->event_lock);
     for ( i = 0; i < d->nr_pirqs ; i++ )
     {
         if ( domain_pirq_to_emuirq(d, i) != IRQ_UNBOUND )
@@ -950,7 +971,7 @@ int arch_domain_soft_reset(struct domain *d)
                 break;
         }
     }
-    spin_unlock(&d->event_lock);
+    write_unlock(&d->event_lock);
 
     if ( ret )
         return ret;
@@ -1491,8 +1512,7 @@ int arch_vcpu_reset(struct vcpu *v)
     return 0;
 }
 
-long cf_check do_vcpu_op(int cmd, unsigned int vcpuid,
-                         XEN_GUEST_HANDLE_PARAM(void) arg)
+long do_vcpu_op(int cmd, unsigned int vcpuid, XEN_GUEST_HANDLE_PARAM(void) arg)
 {
     long rc = 0;
     struct domain *d = current->domain;
@@ -2069,7 +2089,7 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
 
         ctxt_switch_levelling(next);
 
-        if ( opt_ibpb && !is_idle_domain(nextd) )
+        if ( opt_ibpb_ctxt_switch && !is_idle_domain(nextd) )
         {
             static DEFINE_PER_CPU(unsigned int, last);
             unsigned int *last_id = &this_cpu(last);
@@ -2097,10 +2117,10 @@ void context_switch(struct vcpu *prev, struct vcpu *next)
             }
         }
 
-        /* Update the top-of-stack block with the VERW disposition. */
-        info->spec_ctrl_flags &= ~SCF_verw;
-        if ( nextd->arch.verw )
-            info->spec_ctrl_flags |= SCF_verw;
+        /* Update the top-of-stack block with the new spec_ctrl settings. */
+        info->spec_ctrl_flags =
+            (info->spec_ctrl_flags       & ~SCF_DOM_MASK) |
+            (nextd->arch.spec_ctrl_flags &  SCF_DOM_MASK);
     }
 
     sched_context_switched(prev, next);

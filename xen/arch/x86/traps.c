@@ -767,9 +767,13 @@ static int cf_check nmi_show_execution_state(
 
     if ( opt_show_all )
         show_execution_state(regs);
+    else if ( guest_mode(regs) )
+        printk(XENLOG_ERR "CPU%d\t%pv\t%04x:%p in guest\n",
+               cpu, current, regs->cs, _p(regs->rip));
     else
-        printk(XENLOG_ERR "CPU%d @ %04x:%08lx (%pS)\n", cpu, regs->cs,
-               regs->rip, guest_mode(regs) ? NULL : _p(regs->rip));
+        printk(XENLOG_ERR "CPU%d\t%pv\t%04x:%p in Xen: %pS\n",
+               cpu, current, regs->cs, _p(regs->rip), _p(regs->rip));
+
     cpumask_clear_cpu(cpu, &show_state_mask);
 
     return 1;
@@ -845,6 +849,9 @@ void fatal_trap(const struct cpu_user_regs *regs, bool show_remote)
                     msecs = 10;
                 }
             }
+            if ( pending )
+                printk("Non-responding CPUs: {%*pbl}\n",
+                       CPUMASK_PR(&show_state_mask));
         }
     }
 
@@ -1117,7 +1124,8 @@ void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
         if ( !is_hvm_domain(d) || subleaf != 0 )
             break;
 
-        if ( cpu_has_vmx_apic_reg_virt )
+        if ( cpu_has_vmx_apic_reg_virt &&
+             has_assisted_xapic(d) )
             res->a |= XEN_HVM_CPUID_APIC_ACCESS_VIRT;
 
         /*
@@ -1126,7 +1134,7 @@ void cpuid_hypervisor_leaves(const struct vcpu *v, uint32_t leaf,
          * and wrmsr in the guest will run without VMEXITs (see
          * vmx_vlapic_msr_changed()).
          */
-        if ( cpu_has_vmx_virtualize_x2apic_mode &&
+        if ( has_assisted_x2apic(d) &&
              cpu_has_vmx_apic_reg_virt &&
              cpu_has_vmx_virtual_intr_delivery )
             res->a |= XEN_HVM_CPUID_X2APIC_VIRT;

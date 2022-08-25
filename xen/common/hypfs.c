@@ -377,6 +377,11 @@ int hypfs_read_dyndir_id_entry(const struct hypfs_entry_dir *template,
     unsigned int e_namelen, e_len;
 
     e_namelen = snprintf(name, sizeof(name), template->e.name, id);
+    if ( e_namelen >= sizeof(name) )
+    {
+        ASSERT_UNREACHABLE();
+        return -ENOBUFS;
+    }
     e_len = DIRENTRY_SIZE(e_namelen);
     direntry.e.pad = 0;
     direntry.e.type = template->e.type;
@@ -670,7 +675,7 @@ static int hypfs_write(struct hypfs_entry *entry,
     return entry->funcs->write(l, uaddr, ulen);
 }
 
-long cf_check do_hypfs_op(
+long do_hypfs_op(
     unsigned int cmd, XEN_GUEST_HANDLE_PARAM(const_char) arg1,
     unsigned long arg2, XEN_GUEST_HANDLE_PARAM(void) arg3, unsigned long arg4)
 {

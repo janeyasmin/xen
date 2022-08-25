@@ -1229,10 +1229,10 @@ void put_page_from_l1e(l1_pgentry_t l1e, struct domain *l1e_owner)
     if ( (l1e_get_flags(l1e) & _PAGE_GNTTAB) &&
          !l1e_owner->is_shutting_down && !l1e_owner->is_dying )
     {
-        gdprintk(XENLOG_WARNING,
-                 "Attempt to implicitly unmap a granted PTE %" PRIpte "\n",
-                 l1e_get_intpte(l1e));
-        domain_crash(l1e_owner);
+        gprintk(XENLOG_WARNING,
+                "Attempt to implicitly unmap %pd's grant PTE %" PRIpte "\n",
+                l1e_owner, l1e_get_intpte(l1e));
+        pv_inject_hw_exception(TRAP_gp_fault, 0);
     }
 #endif
 
@@ -3018,9 +3018,12 @@ static int _get_page_type(struct page_info *page, unsigned long type,
         struct domain *d = page_get_owner(page);
 
         if ( d && shadow_mode_enabled(d) )
-            shadow_prepare_page_type_change(d, page, type);
+            shadow_prepare_page_type_change(d, page);
 
-        if ( (x & PGT_type_mask) != type )
+        if ( (x & PGT_type_mask) != type &&
+             /* Shadow mode: track only writable pages. */
+             (!shadow_mode_enabled(d) ||
+              ((x & PGT_type_mask) == PGT_writable_page)) )
         {
             /*
              * On type change we check to flush stale TLB entries. It is
@@ -3035,10 +3038,7 @@ static int _get_page_type(struct page_info *page, unsigned long type,
             /* Don't flush if the timestamp is old enough */
             tlbflush_filter(mask, page->tlbflush_timestamp);
 
-            if ( unlikely(!cpumask_empty(mask)) &&
-                 /* Shadow mode: track only writable pages. */
-                 (!shadow_mode_enabled(d) ||
-                  ((nx & PGT_type_mask) == PGT_writable_page)) )
+            if ( unlikely(!cpumask_empty(mask)) )
             {
                 perfc_incr(need_flush_tlb_flush);
                 /*
@@ -3421,7 +3421,7 @@ static int vcpumask_to_pcpumask(
     }
 }
 
-long cf_check do_mmuext_op(
+long do_mmuext_op(
     XEN_GUEST_HANDLE_PARAM(mmuext_op_t) uops,
     unsigned int count,
     XEN_GUEST_HANDLE_PARAM(uint) pdone,
@@ -3960,7 +3960,7 @@ long cf_check do_mmuext_op(
     return rc;
 }
 
-long cf_check do_mmu_update(
+long do_mmu_update(
     XEN_GUEST_HANDLE_PARAM(mmu_update_t) ureqs,
     unsigned int count,
     XEN_GUEST_HANDLE_PARAM(uint) pdone,
@@ -4545,7 +4545,7 @@ static int __do_update_va_mapping(
     return rc;
 }
 
-long cf_check do_update_va_mapping(
+long do_update_va_mapping(
     unsigned long va, u64 val64, unsigned long flags)
 {
     int rc = __do_update_va_mapping(va, val64, flags, current->domain);
@@ -4557,7 +4557,7 @@ long cf_check do_update_va_mapping(
     return rc;
 }
 
-long cf_check do_update_va_mapping_otherdomain(
+long do_update_va_mapping_otherdomain(
     unsigned long va, u64 val64, unsigned long flags, domid_t domid)
 {
     struct domain *pg_owner;
@@ -4580,7 +4580,7 @@ long cf_check do_update_va_mapping_otherdomain(
 #endif /* CONFIG_PV */
 
 #ifdef CONFIG_PV32
-int cf_check compat_update_va_mapping(
+int compat_update_va_mapping(
     unsigned int va, uint32_t lo, uint32_t hi, unsigned int flags)
 {
     int rc = __do_update_va_mapping(va, ((uint64_t)hi << 32) | lo,
@@ -4593,7 +4593,7 @@ int cf_check compat_update_va_mapping(
     return rc;
 }
 
-int cf_check compat_update_va_mapping_otherdomain(
+int compat_update_va_mapping_otherdomain(
     unsigned int va, uint32_t lo, uint32_t hi, unsigned int flags,
     domid_t domid)
 {

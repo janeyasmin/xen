@@ -71,11 +71,12 @@ struct xsd_errors
 #ifdef EINVAL
 #define XSD_ERROR(x) { x, #x }
 /* LINTED: static unused */
-static struct xsd_errors xsd_errors[]
+static const struct xsd_errors xsd_errors[]
 #if defined(__GNUC__)
 __attribute__((unused))
 #endif
     = {
+    /* /!\ New errors should be added at the end of the array. */
     XSD_ERROR(EINVAL),
     XSD_ERROR(EACCES),
     XSD_ERROR(EEXIST),
@@ -90,7 +91,8 @@ __attribute__((unused))
     XSD_ERROR(EBUSY),
     XSD_ERROR(EAGAIN),
     XSD_ERROR(EISCONN),
-    XSD_ERROR(E2BIG)
+    XSD_ERROR(E2BIG),
+    XSD_ERROR(EPERM),
 };
 #endif
 

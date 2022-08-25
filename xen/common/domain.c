@@ -567,6 +567,9 @@ struct domain *domain_create(domid_t domid,
     /* Sort out our idea of is_system_domain(). */
     d->domain_id = domid;
 
+    /* Holding CDF_* internal flags. */
+    d->cdf = flags;
+
     /* Debug sanity. */
     ASSERT(is_system_domain(d) ? config == NULL : config != NULL);
 
@@ -1753,7 +1756,7 @@ long common_vcpu_op(int cmd, struct vcpu *v, XEN_GUEST_HANDLE_PARAM(void) arg)
 }
 
 #ifdef arch_vm_assist_valid_mask
-long cf_check do_vm_assist(unsigned int cmd, unsigned int type)
+long do_vm_assist(unsigned int cmd, unsigned int type)
 {
     struct domain *currd = current->domain;
     const unsigned long valid = arch_vm_assist_valid_mask(currd);

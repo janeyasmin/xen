@@ -19,6 +19,8 @@
 
         .file "svm/entry.S"
 
+#include <xen/lib.h>
+
 #include <asm/asm_defns.h>
 #include <asm/page.h>
 
@@ -56,6 +58,9 @@ __UNLIKELY_END(nsvm_hap)
         call svm_vmenter_helper
 
         clgi
+
+        ALTERNATIVE "", STR(call vmentry_virt_spec_ctrl), \
+                        X86_FEATURE_VIRT_SC_MSR_HVM
 
         /* WARNING! `ret`, `call *`, `jmp *` not safe beyond this point. */
         /* SPEC_CTRL_EXIT_TO_SVM       Req: b=curr %rsp=regs/cpuinfo, Clob: acd */
@@ -97,23 +102,42 @@ __UNLIKELY_END(nsvm_hap)
 
         GET_CURRENT(bx)
 
-        /* SPEC_CTRL_ENTRY_FROM_SVM    Req: %rsp=regs/cpuinfo         Clob: acd */
+        /* SPEC_CTRL_ENTRY_FROM_SVM    Req: %rsp=regs/cpuinfo, %rdx=0 Clob: acd */
+
+        .macro svm_vmexit_cond_ibpb
+            testb  $SCF_entry_ibpb, CPUINFO_xen_spec_ctrl(%rsp)
+            jz     .L_skip_ibpb
+
+            mov    $MSR_PRED_CMD, %ecx
+            mov    $PRED_CMD_IBPB, %eax
+            wrmsr
+.L_skip_ibpb:
+	.endm
+        ALTERNATIVE "", svm_vmexit_cond_ibpb, X86_FEATURE_IBPB_ENTRY_HVM
+
         ALTERNATIVE "", DO_OVERWRITE_RSB, X86_FEATURE_SC_RSB_HVM
 
         .macro svm_vmexit_spec_ctrl
-            /*
-             * Write to MSR_SPEC_CTRL unconditionally, for the RAS[:32]
-             * flushing side effect.
-             */
-            mov    $MSR_SPEC_CTRL, %ecx
             movzbl CPUINFO_xen_spec_ctrl(%rsp), %eax
+            movzbl CPUINFO_last_spec_ctrl(%rsp), %edx
+            cmp    %edx, %eax
+            je     1f /* Skip write if value is correct. */
+            mov    $MSR_SPEC_CTRL, %ecx
             xor    %edx, %edx
             wrmsr
             mov    %al, CPUINFO_last_spec_ctrl(%rsp)
+1:
         .endm
         ALTERNATIVE "", svm_vmexit_spec_ctrl, X86_FEATURE_SC_MSR_HVM
         /* WARNING! `ret`, `call *`, `jmp *` not safe before this point. */
 
+        ALTERNATIVE "", STR(call vmexit_virt_spec_ctrl), \
+                        X86_FEATURE_VIRT_SC_MSR_HVM
+
+        /*
+         * STGI is executed unconditionally, and is sufficiently serialising
+         * to safely resolve any Spectre-v1 concerns in the above logic.
+         */
         stgi
 GLOBAL(svm_stgi_label)
         mov  %rsp,%rdi

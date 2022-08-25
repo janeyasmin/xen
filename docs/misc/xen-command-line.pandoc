@@ -721,9 +721,14 @@ Available alternatives, with their meaning, are:
 
 ### dbgp
 > `= ehci[ <integer> | @pci<bus>:<slot>.<func> ]`
+> `= xhci[ <integer> | @pci<bus>:<slot>.<func> ]`
 
 Specify the USB controller to use, either by instance number (when going
 over the PCI busses sequentially) or by PCI device (must be on segment 0).
+
+Use `ehci` for EHCI debug port, use `xhci` for XHCI debug capability (output
+only). XHCI driver will wait indefinitely for the debug host to connect - make
+sure the cable is connected.
 
 ### debug_stack_lines
 > `= <integer>`
@@ -1405,7 +1410,7 @@ detection of systems known to misbehave upon accesses to that port.
 
 ### iommu
     = List of [ <bool>, verbose, debug, force, required, quarantine[=scratch-page],
-                sharept, intremap, intpost, crash-disable,
+                sharept, superpages, intremap, intpost, crash-disable,
                 snoop, qinval, igfx, amd-iommu-perdev-intremap,
                 dom0-{passthrough,strict} ]
 
@@ -1480,6 +1485,12 @@ boolean (e.g. `iommu=no`) can override this and leave the IOMMUs disabled.
     systems.
 
     This option is ignored on ARM, and the pagetables are always shared.
+
+*   The `superpages` boolean controls whether superpage mappings may be used
+    in IOMMU page tables.  If using this option is necessary to fix an issue,
+    please report a bug.
+
+    This option is only valid on x86.
 
 *   The `intremap` boolean controls the Interrupt Remapping sub-feature, and
     is active by default on compatible hardware.  On x86 systems, the first
@@ -1685,10 +1696,23 @@ one pending bit to be allocated.
 Defaults to 20 bits (to cover at most 1048576 interrupts).
 
 ### mce (x86)
-> `= <integer>`
+> `= <boolean>`
+
+> Default: `true`
+
+Allows to disable the use of Machine Check Exceptions.  Note that doing
+so may result in silent shutdown of the system in case an event occurs
+which would have resulted in raising a Machine Check Exception.  Silent
+here is as far as Xen is concerned; firmware may offer to retrieve some
+collected data.
 
 ### mce_fb (Intel)
-> `= <integer>`
+> `= <boolean>`
+
+> Default: `false`
+
+Force broadcasting of Machine Check Exceptions, suppressing the use of
+Local MCE functionality available in newer Intel hardware.
 
 ### mce_verbosity (x86)
 > `= verbose`
@@ -2257,9 +2281,11 @@ not be able to control the state of the mitigation.
 By default SSBD will be mitigated at runtime (i.e `ssbd=runtime`).
 
 ### spec-ctrl (x86)
-> `= List of [ <bool>, xen=<bool>, {pv,hvm,msr-sc,rsb,md-clear}=<bool>,
->              bti-thunk=retpoline|lfence|jmp, {ibrs,ibpb,ssbd,eager-fpu,
->              l1d-flush,branch-harden,srb-lock,unpriv-mmio}=<bool> ]`
+> `= List of [ <bool>, xen=<bool>, {pv,hvm}=<bool>,
+>              {msr-sc,rsb,md-clear,ibpb-entry}=<bool>|{pv,hvm}=<bool>,
+>              bti-thunk=retpoline|lfence|jmp, {ibrs,ibpb,ssbd,psfd,
+>              eager-fpu,l1d-flush,branch-harden,srb-lock,
+>              unpriv-mmio}=<bool> ]`
 
 Controls for speculative execution sidechannel mitigations.  By default, Xen
 will pick the most appropriate mitigations based on compiled in support,
@@ -2281,12 +2307,18 @@ in place for guests to use.
 
 Use of a positive boolean value for either of these options is invalid.
 
-The booleans `pv=`, `hvm=`, `msr-sc=`, `rsb=` and `md-clear=` offer fine
-grained control over the primitives by Xen.  These impact Xen's ability to
-protect itself, and Xen's ability to virtualise support for guests to use.
+The `pv=`, `hvm=`, `msr-sc=`, `rsb=`, `md-clear=` and `ibpb-entry=` options
+offer fine grained control over the primitives by Xen.  These impact Xen's
+ability to protect itself, and/or Xen's ability to virtualise support for
+guests to use.
 
 * `pv=` and `hvm=` offer control over all suboptions for PV and HVM guests
   respectively.
+* Each other option can be used either as a plain boolean
+  (e.g. `spec-ctrl=rsb` to control both the PV and HVM sub-options), or with
+  `pv=` or `hvm=` subsuboptions (e.g. `spec-ctrl=rsb=no-hvm` to disable HVM
+  RSB only).
+
 * `msr-sc=` offers control over Xen's support for manipulating `MSR_SPEC_CTRL`
   on entry and exit.  These blocks are necessary to virtualise support for
   guests and if disabled, guests will be unable to use IBRS/STIBP/SSBD/etc.
@@ -2297,6 +2329,11 @@ protect itself, and Xen's ability to virtualise support for guests to use.
   compatibility with development versions of this fix, `mds=` is also accepted
   on Xen 4.12 and earlier as an alias.  Consult vendor documentation in
   preference to here.*
+* `ibpb-entry=` offers control over whether IBPB (Indirect Branch Prediction
+  Barrier) is used on entry to Xen.  This is used by default on hardware
+  vulnerable to Branch Type Confusion, but for performance reasons, dom0 is
+  unprotected by default.  If it necessary to protect dom0 too, boot with
+  `spec-ctrl=ibpb-entry`.
 
 If Xen was compiled with INDIRECT_THUNK support, `bti-thunk=` can be used to
 select which of the thunks gets patched into the `__x86_indirect_thunk_%reg`
@@ -2309,15 +2346,25 @@ On hardware supporting IBRS (Indirect Branch Restricted Speculation), the
 If Xen is not using IBRS itself, functionality is still set up so IBRS can be
 virtualised for guests.
 
-On hardware supporting IBPB (Indirect Branch Prediction Barrier), the `ibpb=`
-option can be used to force (the default) or prevent Xen from issuing branch
-prediction barriers on vcpu context switches.
+On hardware supporting STIBP (Single Thread Indirect Branch Predictors), the
+`stibp=` option can be used to force or prevent Xen using the feature itself.
+By default, Xen will use STIBP when IBRS is in use (IBRS implies STIBP), and
+when hardware hints recommend using it as a blanket setting.
 
 On hardware supporting SSBD (Speculative Store Bypass Disable), the `ssbd=`
 option can be used to force or prevent Xen using the feature itself.  On AMD
 hardware, this is a global option applied at boot, and not virtualised for
 guest use.  On Intel hardware, the feature is virtualised for guests,
 independently of Xen's choice of setting.
+
+On hardware supporting PSFD (Predictive Store Forwarding Disable), the `psfd=`
+option can be used to force or prevent Xen using the feature itself.  By
+default, Xen will not use PSFD.  PSFD is implied by SSBD, and SSBD is off by
+default.
+
+On hardware supporting IBPB (Indirect Branch Prediction Barrier), the `ibpb=`
+option can be used to force (the default) or prevent Xen from issuing branch
+prediction barriers on vcpu context switches.
 
 On all hardware, the `eager-fpu=` option can be used to force or prevent Xen
 from using fully eager FPU context switches.  This is currently implemented as

@@ -221,6 +221,7 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
         {"serialize",    0x00000007,  0, CPUID_REG_EDX, 14,  1},
         {"tsxldtrk",     0x00000007,  0, CPUID_REG_EDX, 16,  1},
         {"cet-ibt",      0x00000007,  0, CPUID_REG_EDX, 20,  1},
+        {"avx512-fp16",  0x00000007,  0, CPUID_REG_EDX, 23,  1},
         {"ibrsb",        0x00000007,  0, CPUID_REG_EDX, 26,  1},
         {"stibp",        0x00000007,  0, CPUID_REG_EDX, 27,  1},
         {"l1d-flush",    0x00000007,  0, CPUID_REG_EDX, 28,  1},
@@ -289,6 +290,7 @@ int libxl_cpuid_parse_config(libxl_cpuid_policy_list *cpuid, const char* str)
         {"virt-ssbd",    0x80000008, NA, CPUID_REG_EBX, 25,  1},
         {"ssb-no",       0x80000008, NA, CPUID_REG_EBX, 26,  1},
         {"psfd",         0x80000008, NA, CPUID_REG_EBX, 28,  1},
+        {"btc-no",       0x80000008, NA, CPUID_REG_EBX, 29,  1},
 
         {"nc",           0x80000008, NA, CPUID_REG_ECX,  0,  8},
         {"apicidsize",   0x80000008, NA, CPUID_REG_ECX, 12,  4},

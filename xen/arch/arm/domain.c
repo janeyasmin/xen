@@ -63,7 +63,7 @@ static void do_idle(void)
     rcu_idle_exit(cpu);
 }
 
-void idle_loop(void)
+static void noreturn idle_loop(void)
 {
     unsigned int cpu = smp_processor_id();
 
@@ -330,6 +330,9 @@ static void schedule_tail(struct vcpu *prev)
     /* Ensure that the vcpu has an up-to-date time base. */
     update_vcpu_system_time(current);
 }
+
+extern void noreturn return_to_new_vcpu32(void);
+extern void noreturn return_to_new_vcpu64(void);
 
 static void continue_new_vcpu(struct vcpu *prev)
 {
@@ -709,8 +712,6 @@ int arch_domain_create(struct domain *d,
     ioreq_domain_init(d);
 #endif
 
-    d->arch.directmap = flags & CDF_directmap;
-
     /* p2m_init relies on some value initialized by the IOMMU subsystem */
     if ( (rc = iommu_domain_init(d, config->iommu_opts)) != 0 )
         goto fail;
@@ -882,9 +883,8 @@ static int is_guest_pv64_psr(uint64_t psr)
 #endif
 
 /*
- * Initialise VCPU state. The context can be supplied by either the
- * toolstack (XEN_DOMCTL_setvcpucontext) or the guest
- * (VCPUOP_initialise) and therefore must be properly validated.
+ * Initialise vCPU state. The context may be supplied by an external entity, so
+ * we need to validate it.
  */
 int arch_set_info_guest(
     struct vcpu *v, vcpu_guest_context_u c)

@@ -259,7 +259,8 @@ extern s8 hvm_port80_allowed;
 extern const struct hvm_function_table *start_svm(void);
 extern const struct hvm_function_table *start_vmx(void);
 
-int hvm_domain_initialise(struct domain *d);
+int hvm_domain_initialise(struct domain *d,
+                          const struct xen_domctl_createdomain *config);
 void hvm_domain_relinquish_resources(struct domain *d);
 void hvm_domain_destroy(struct domain *d);
 
@@ -387,6 +388,12 @@ int hvm_get_param(struct domain *d, uint32_t index, uint64_t *value);
 
 #define hvm_tsc_scaling_ratio(d) \
     ((d)->arch.hvm.tsc_scaling_ratio)
+
+extern bool assisted_xapic_available;
+extern bool assisted_x2apic_available;
+
+#define has_assisted_xapic(d) ((d)->arch.hvm.assisted_xapic)
+#define has_assisted_x2apic(d) ((d)->arch.hvm.assisted_x2apic)
 
 #define hvm_get_guest_time(v) hvm_get_guest_time_fixed(v, 0)
 
@@ -901,7 +908,11 @@ static inline void hvm_set_reg(struct vcpu *v, unsigned int reg, uint64_t val)
 #define hvm_tsc_scaling_supported false
 #define hap_has_1gb false
 #define hap_has_2mb false
+#define assisted_xapic_available false
+#define assisted_x2apic_available false
 
+#define has_assisted_xapic(d) ((void)(d), false)
+#define has_assisted_x2apic(d) ((void)(d), false)
 #define hvm_paging_enabled(v) ((void)(v), false)
 #define hvm_wp_enabled(v) ((void)(v), false)
 #define hvm_pcid_enabled(v) ((void)(v), false)

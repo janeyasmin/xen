@@ -18,29 +18,29 @@ CFLAGS   += -Werror -Wmissing-prototypes
 CFLAGS   += $(CFLAGS_xeninclude)
 CFLAGS   += $(foreach lib, $(USELIBS_$(LIBNAME)), $(CFLAGS_libxen$(lib)))
 
-LDLIBS += $(foreach lib, $(USELIBS_$(LIBNAME)), $(LDLIBS_libxen$(lib)))
+LDLIBS += $(call xenlibs-ldlibs,$(USELIBS_$(LIBNAME)))
 
 PIC_OBJS := $(OBJS-y:.o=.opic)
 
 LIB_FILE_NAME = $(FILENAME_$(LIBNAME))
-LIB := lib$(LIB_FILE_NAME).a
+TARGETS := lib$(LIB_FILE_NAME).a
 ifneq ($(nosharedlibs),y)
-LIB += lib$(LIB_FILE_NAME).so
+TARGETS += lib$(LIB_FILE_NAME).so
 endif
 
 PKG_CONFIG ?= $(LIB_FILE_NAME).pc
 PKG_CONFIG_NAME ?= Xen$(LIBNAME)
 PKG_CONFIG_DESC ?= The $(PKG_CONFIG_NAME) library for Xen hypervisor
 PKG_CONFIG_VERSION := $(MAJOR).$(MINOR)
-PKG_CONFIG_USELIBS := $(sort $(SHLIB_libxen$(LIBNAME)))
+PKG_CONFIG_USELIBS := $(SHLIB_libxen$(LIBNAME))
 PKG_CONFIG_LIB := $(LIB_FILE_NAME)
 PKG_CONFIG_REQPRIV := $(subst $(space),$(comma),$(strip $(foreach lib,$(patsubst ctrl,control,$(USELIBS_$(LIBNAME))),xen$(lib))))
 
 ifneq ($(CONFIG_LIBXC_MINIOS),y)
-PKG_CONFIG_INST := $(PKG_CONFIG)
-$(PKG_CONFIG_INST): PKG_CONFIG_PREFIX = $(prefix)
-$(PKG_CONFIG_INST): PKG_CONFIG_INCDIR = $(includedir)
-$(PKG_CONFIG_INST): PKG_CONFIG_LIBDIR = $(libdir)
+TARGETS += $(PKG_CONFIG)
+$(PKG_CONFIG): PKG_CONFIG_PREFIX = $(prefix)
+$(PKG_CONFIG): PKG_CONFIG_INCDIR = $(includedir)
+$(PKG_CONFIG): PKG_CONFIG_LIBDIR = $(libdir)
 endif
 
 PKG_CONFIG_LOCAL := $(PKG_CONFIG_DIR)/$(PKG_CONFIG)
@@ -55,21 +55,19 @@ $(PKG_CONFIG_LOCAL): PKG_CONFIG_INCDIR = $(XEN_INCLUDE)
 $(PKG_CONFIG_LOCAL): PKG_CONFIG_LIBDIR = $(CURDIR)
 
 .PHONY: all
-all: headers.chk $(LIB) $(PKG_CONFIG_INST) $(PKG_CONFIG_LOCAL) libxen$(LIBNAME).map $(LIBHEADERS)
+all: $(TARGETS) $(PKG_CONFIG_LOCAL) libxen$(LIBNAME).map $(LIBHEADERS)
 
 ifneq ($(NO_HEADERS_CHK),y)
-headers.chk:
+all: headers.chk
+
+headers.chk: $(LIBHEADERS) $(AUTOINCS)
 	for i in $(filter %.h,$^); do \
 	    $(CC) -x c -ansi -Wall -Werror $(CFLAGS_xeninclude) \
 	          -S -o /dev/null $$i || exit 1; \
 	    echo $$i; \
 	done >$@.new
 	mv $@.new $@
-else
-.PHONY: headers.chk
 endif
-
-headers.chk: $(LIBHEADERS) $(AUTOINCS)
 
 headers.lst: FORCE
 	@{ set -e; $(foreach h,$(LIBHEADERS),echo $(h);) } > $@.tmp
@@ -124,10 +122,9 @@ TAGS:
 
 .PHONY: clean
 clean::
-	rm -rf $(LIB) *~ $(DEPS_RM) $(OBJS-y) $(PIC_OBJS)
+	rm -rf $(TARGETS) *~ $(DEPS_RM) $(OBJS-y) $(PIC_OBJS)
 	rm -f lib$(LIB_FILE_NAME).so.$(MAJOR).$(MINOR) lib$(LIB_FILE_NAME).so.$(MAJOR)
 	rm -f headers.chk headers.lst
-	rm -f $(PKG_CONFIG)
 
 .PHONY: distclean
 distclean: clean

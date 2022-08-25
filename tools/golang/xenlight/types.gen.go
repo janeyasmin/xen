@@ -99,6 +99,20 @@ DiskBackendUnknown DiskBackend = 0
 DiskBackendPhy DiskBackend = 1
 DiskBackendTap DiskBackend = 2
 DiskBackendQdisk DiskBackend = 3
+DiskBackendStandalone DiskBackend = 4
+)
+
+type DiskSpecification int
+const(
+DiskSpecificationUnknown DiskSpecification = 0
+DiskSpecificationXen DiskSpecification = 1
+DiskSpecificationVirtio DiskSpecification = 2
+)
+
+type DiskTransport int
+const(
+DiskTransportUnknown DiskTransport = 0
+DiskTransportMmio DiskTransport = 1
 )
 
 type NicType int
@@ -520,6 +534,8 @@ Vuart VuartType
 }
 ArchX86 struct {
 MsrRelaxed Defbool
+AssistedXapic Defbool
+AssistedX2Apic Defbool
 }
 Altp2M Altp2MMode
 VmtraceBufKb int
@@ -643,6 +659,10 @@ Readwrite int
 IsCdrom int
 DirectIoSafe bool
 DiscardEnable Defbool
+Specification DiskSpecification
+Transport DiskTransport
+Irq uint32
+Base uint64
 ColoEnable Defbool
 ColoRestoreEnable Defbool
 ColoHost string
@@ -650,6 +670,7 @@ ColoPort int
 ColoExport string
 ActiveDisk string
 HiddenDisk string
+Trusted Defbool
 }
 
 type DeviceNic struct {
@@ -716,6 +737,7 @@ ColoFilterSecRedirector1Outdev string
 ColoFilterSecRewriter0Queue string
 ColoCheckpointHost string
 ColoCheckpointPort string
+Trusted Defbool
 }
 
 type DevicePci struct {
@@ -1014,6 +1036,8 @@ CapVmtrace bool
 CapVpmu bool
 CapGnttabV1 bool
 CapGnttabV2 bool
+CapAssistedXapic bool
+CapAssistedX2Apic bool
 }
 
 type Connectorinfo struct {

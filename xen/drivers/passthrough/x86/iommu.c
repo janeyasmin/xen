@@ -12,6 +12,7 @@
  * this program; If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <xen/cpu.h>
 #include <xen/sched.h>
 #include <xen/iocap.h>
 #include <xen/iommu.h>
@@ -25,11 +26,13 @@
 #include <asm/hvm/io.h>
 #include <asm/io_apic.h>
 #include <asm/mem_paging.h>
+#include <asm/pt-contig-markers.h>
 #include <asm/setup.h>
 
 const struct iommu_init_ops *__initdata iommu_init_ops;
 struct iommu_ops __ro_after_init iommu_ops;
 bool __read_mostly iommu_non_coherent;
+bool __initdata iommu_superpages = true;
 
 enum iommu_intremap __read_mostly iommu_intremap = iommu_intremap_full;
 
@@ -103,7 +106,12 @@ int __init iommu_hardware_setup(void)
         mask_IO_APIC_setup(ioapic_entries);
     }
 
+    if ( !iommu_superpages )
+        iommu_ops.page_sizes &= PAGE_SIZE_4K;
+
     rc = iommu_init_ops->setup();
+
+    ASSERT(iommu_superpages || iommu_ops.page_sizes == PAGE_SIZE_4K);
 
     if ( ioapic_entries )
     {
@@ -348,8 +356,8 @@ static unsigned int __hwdom_init hwdom_iommu_map(const struct domain *d,
 
 void __hwdom_init arch_iommu_hwdom_init(struct domain *d)
 {
-    unsigned long i, top, max_pfn;
-    unsigned int flush_flags = 0;
+    unsigned long i, top, max_pfn, start, count;
+    unsigned int flush_flags = 0, start_perms = 0;
 
     BUG_ON(!is_hardware_domain(d));
 
@@ -380,31 +388,57 @@ void __hwdom_init arch_iommu_hwdom_init(struct domain *d)
      * First Mb will get mapped in one go by pvh_populate_p2m(). Avoid
      * setting up potentially conflicting mappings here.
      */
-    i = paging_mode_translate(d) ? PFN_DOWN(MB(1)) : 0;
+    start = paging_mode_translate(d) ? PFN_DOWN(MB(1)) : 0;
 
-    for ( ; i < top; i++ )
+    for ( i = start, count = 0; i < top; )
     {
         unsigned long pfn = pdx_to_pfn(i);
         unsigned int perms = hwdom_iommu_map(d, pfn, max_pfn);
-        int rc;
 
         if ( !perms )
-            rc = 0;
+            /* nothing */;
         else if ( paging_mode_translate(d) )
+        {
+            int rc;
+
             rc = p2m_add_identity_entry(d, pfn,
                                         perms & IOMMUF_writable ? p2m_access_rw
                                                                 : p2m_access_r,
                                         0);
+            if ( rc )
+                printk(XENLOG_WARNING
+                       "%pd: identity mapping of %lx failed: %d\n",
+                       d, pfn, rc);
+        }
+        else if ( pfn != start + count || perms != start_perms )
+        {
+            long rc;
+
+        commit:
+            while ( (rc = iommu_map(d, _dfn(start), _mfn(start), count,
+                                    start_perms | IOMMUF_preempt,
+                                    &flush_flags)) > 0 )
+            {
+                start += rc;
+                count -= rc;
+                process_pending_softirqs();
+            }
+            if ( rc )
+                printk(XENLOG_WARNING
+                       "%pd: IOMMU identity mapping of [%lx,%lx) failed: %ld\n",
+                       d, start, start + count, rc);
+            start = pfn;
+            count = 1;
+            start_perms = perms;
+        }
         else
-            rc = iommu_map(d, _dfn(pfn), _mfn(pfn), 1ul << PAGE_ORDER_4K,
-                           perms, &flush_flags);
+            ++count;
 
-        if ( rc )
-            printk(XENLOG_WARNING "%pd: identity %smapping of %lx failed: %d\n",
-                   d, !paging_mode_translate(d) ? "IOMMU " : "", pfn, rc);
-
-        if (!(i & 0xfffff))
+        if ( !(++i & 0xfffff) )
             process_pending_softirqs();
+
+        if ( i == top && count )
+            goto commit;
     }
 
     /* Use if to avoid compiler warning */
@@ -501,11 +535,12 @@ int iommu_free_pgtables(struct domain *d)
     return 0;
 }
 
-struct page_info *iommu_alloc_pgtable(struct domain_iommu *hd)
+struct page_info *iommu_alloc_pgtable(struct domain_iommu *hd,
+                                      uint64_t contig_mask)
 {
     unsigned int memflags = 0;
     struct page_info *pg;
-    void *p;
+    uint64_t *p;
 
 #ifdef CONFIG_NUMA
     if ( hd->node != NUMA_NO_NODE )
@@ -517,7 +552,29 @@ struct page_info *iommu_alloc_pgtable(struct domain_iommu *hd)
         return NULL;
 
     p = __map_domain_page(pg);
-    clear_page(p);
+
+    if ( contig_mask )
+    {
+        /* See pt-contig-markers.h for a description of the marker scheme. */
+        unsigned int i, shift = find_first_set_bit(contig_mask);
+
+        ASSERT((CONTIG_LEVEL_SHIFT & (contig_mask >> shift)) == CONTIG_LEVEL_SHIFT);
+
+        p[0] = (CONTIG_LEVEL_SHIFT + 0ull) << shift;
+        p[1] = 0;
+        p[2] = 1ull << shift;
+        p[3] = 0;
+
+        for ( i = 4; i < PAGE_SIZE / sizeof(*p); i += 4 )
+        {
+            p[i + 0] = (find_first_set_bit(i) + 0ull) << shift;
+            p[i + 1] = 0;
+            p[i + 2] = 1ull << shift;
+            p[i + 3] = 0;
+        }
+    }
+    else
+        clear_page(p);
 
     iommu_sync_cache(p, PAGE_SIZE);
 
@@ -529,6 +586,105 @@ struct page_info *iommu_alloc_pgtable(struct domain_iommu *hd)
 
     return pg;
 }
+
+/*
+ * Intermediate page tables which get replaced by large pages may only be
+ * freed after a suitable IOTLB flush. Hence such pages get queued on a
+ * per-CPU list, with a per-CPU tasklet processing the list on the assumption
+ * that the necessary IOTLB flush will have occurred by the time tasklets get
+ * to run. (List and tasklet being per-CPU has the benefit of accesses not
+ * requiring any locking.)
+ */
+static DEFINE_PER_CPU(struct page_list_head, free_pgt_list);
+static DEFINE_PER_CPU(struct tasklet, free_pgt_tasklet);
+
+static void cf_check free_queued_pgtables(void *arg)
+{
+    struct page_list_head *list = arg;
+    struct page_info *pg;
+    unsigned int done = 0;
+
+    ASSERT(list == &this_cpu(free_pgt_list));
+
+    while ( (pg = page_list_remove_head(list)) )
+    {
+        free_domheap_page(pg);
+
+        /*
+         * Just to be on the safe side, check for processing softirqs every
+         * once in a while.  Generally it is expected that parties queuing
+         * pages for freeing will find a need for preemption before too many
+         * pages can be queued.  Granularity of checking is somewhat arbitrary.
+         */
+        if ( !(++done & 0x1ff) )
+             process_pending_softirqs();
+    }
+}
+
+void iommu_queue_free_pgtable(struct domain_iommu *hd, struct page_info *pg)
+{
+    unsigned int cpu = smp_processor_id();
+
+    spin_lock(&hd->arch.pgtables.lock);
+    page_list_del(pg, &hd->arch.pgtables.list);
+    spin_unlock(&hd->arch.pgtables.lock);
+
+    page_list_add_tail(pg, &per_cpu(free_pgt_list, cpu));
+
+    tasklet_schedule(&per_cpu(free_pgt_tasklet, cpu));
+}
+
+static int cf_check cpu_callback(
+    struct notifier_block *nfb, unsigned long action, void *hcpu)
+{
+    unsigned int cpu = (unsigned long)hcpu;
+    struct page_list_head *list = &per_cpu(free_pgt_list, cpu);
+    struct tasklet *tasklet = &per_cpu(free_pgt_tasklet, cpu);
+
+    switch ( action )
+    {
+    case CPU_DOWN_PREPARE:
+        tasklet_kill(tasklet);
+        break;
+
+    case CPU_DEAD:
+        if ( !page_list_empty(list) )
+        {
+            page_list_splice(list, &this_cpu(free_pgt_list));
+            INIT_PAGE_LIST_HEAD(list);
+            tasklet_schedule(&this_cpu(free_pgt_tasklet));
+        }
+        break;
+
+    case CPU_UP_PREPARE:
+        INIT_PAGE_LIST_HEAD(list);
+        fallthrough;
+    case CPU_DOWN_FAILED:
+        tasklet_init(tasklet, free_queued_pgtables, list);
+        if ( !page_list_empty(list) )
+            tasklet_schedule(tasklet);
+        break;
+    }
+
+    return NOTIFY_DONE;
+}
+
+static struct notifier_block cpu_nfb = {
+    .notifier_call = cpu_callback,
+};
+
+static int __init cf_check bsp_init(void)
+{
+    if ( iommu_enabled )
+    {
+        cpu_callback(&cpu_nfb, CPU_UP_PREPARE,
+                     (void *)(unsigned long)smp_processor_id());
+        register_cpu_notifier(&cpu_nfb);
+    }
+
+    return 0;
+}
+presmp_initcall(bsp_init);
 
 bool arch_iommu_use_permitted(const struct domain *d)
 {

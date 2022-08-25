@@ -186,6 +186,11 @@ endif # root-make-done
 # We process the rest of the Makefile if this is the final invocation of make
 ifeq ($(need-sub-make),)
 
+# Do not print "Entering directory ...",
+# but we want to display it when entering to the output directory
+# so that IDEs/editors are able to understand relative filenames.
+MAKEFLAGS += --no-print-directory
+
 ifeq ($(abs_srctree),$(abs_objtree))
     # building in the source tree
     srctree := .
@@ -464,6 +469,22 @@ endif
 .PHONY: _build
 _build: $(TARGET)$(CONFIG_XEN_INSTALL_SUFFIX)
 
+# Strip
+#
+# INSTALL_EFI_STRIP, if defined, will cause xen.efi to be stripped before it
+# is installed. If INSTALL_EFI_STRIP is '1', then the default option(s) below
+# will be used. Otherwise, INSTALL_EFI_STRIP value will be used as the
+# option(s) to the strip command.
+ifdef INSTALL_EFI_STRIP
+
+ifeq ($(INSTALL_EFI_STRIP),1)
+efi-strip-opt := --strip-debug --keep-file-symbols
+else
+efi-strip-opt := $(INSTALL_EFI_STRIP)
+endif
+
+endif
+
 .PHONY: _install
 _install: D=$(DESTDIR)
 _install: T=$(notdir $(TARGET))
@@ -488,6 +509,9 @@ _install: $(TARGET)$(CONFIG_XEN_INSTALL_SUFFIX)
 		ln -sf $(T)-$(XEN_FULLVERSION).efi $(D)$(EFI_DIR)/$(T)-$(XEN_VERSION).efi; \
 		ln -sf $(T)-$(XEN_FULLVERSION).efi $(D)$(EFI_DIR)/$(T).efi; \
 		if [ -n '$(EFI_MOUNTPOINT)' -a -n '$(EFI_VENDOR)' ]; then \
+			$(if $(efi-strip-opt), \
+			     $(STRIP) $(efi-strip-opt) -p -o $(TARGET).efi.stripped $(TARGET).efi && \
+			     $(INSTALL_DATA) $(TARGET).efi.stripped $(D)$(EFI_MOUNTPOINT)/efi/$(EFI_VENDOR)/$(T)-$(XEN_FULLVERSION).efi ||) \
 			$(INSTALL_DATA) $(TARGET).efi $(D)$(EFI_MOUNTPOINT)/efi/$(EFI_VENDOR)/$(T)-$(XEN_FULLVERSION).efi; \
 		elif [ "$(D)" = "$(patsubst $(shell cd $(XEN_ROOT) && pwd)/%,%,$(D))" ]; then \
 			echo 'EFI installation only partially done (EFI_VENDOR not set)' >&2; \
@@ -544,10 +568,11 @@ _clean:
 		-o -name ".*.o.tmp" -o -name "*~" -o -name "core" \
 		-o -name '*.lex.c' -o -name '*.tab.[ch]' -o -name '*.c.cppcheck' \
 		-o -name "*.gcno" -o -name ".*.cmd" -o -name "lib.a" \) -exec rm -f {} \;
-	rm -f include/asm $(TARGET) $(TARGET).gz $(TARGET).efi $(TARGET).efi.map $(TARGET)-syms $(TARGET)-syms.map
+	rm -f include/asm $(TARGET) $(TARGET).gz $(TARGET)-syms $(TARGET)-syms.map
+	rm -f $(TARGET).efi $(TARGET).efi.map $(TARGET).efi.stripped
 	rm -f asm-offsets.s arch/*/include/asm/asm-offsets.h
 	rm -f .banner .allconfig.tmp include/xen/compile.h
-	rm -f xen-cppcheck.xml
+	rm -f cppcheck-misra.* xen-cppcheck.xml
 
 .PHONY: _distclean
 _distclean: clean
@@ -641,6 +666,10 @@ CPPCHECK_HTMLREPORT ?= cppcheck-htmlreport
 # build directory. This can be changed by giving a directory in this variable.
 CPPCHECK_HTMLREPORT_OUTDIR ?= cppcheck-htmlreport
 
+# By default we do not check misra rules, to enable pass "CPPCHECK_MISRA=y" to
+# make command line.
+CPPCHECK_MISRA ?= n
+
 # Compile flags to pass to cppcheck:
 # - include directories and defines Xen Makefile is passing (from CFLAGS)
 # - include config.h as this is passed directly to the compiler.
@@ -665,12 +694,21 @@ CPPCHECKFILES := $(wildcard $(patsubst $(objtree)/%.o,$(srctree)/%.c, \
                  $(filter-out $(objtree)/tools/%, \
                  $(shell find $(objtree) -name "*.o"))))
 
+# Headers and files required to run cppcheck on a file
+CPPCHECKDEPS := $(objtree)/include/generated/autoconf.h \
+                $(objtree)/include/generated/compiler-def.h
+
+ifeq ($(CPPCHECK_MISRA),y)
+    CPPCHECKFLAGS += --addon=cppcheck-misra.json
+    CPPCHECKDEPS += cppcheck-misra.json
+endif
+
 quiet_cmd_cppcheck_xml = CPPCHECK $(patsubst $(srctree)/%,%,$<)
 cmd_cppcheck_xml = $(CPPCHECK) -v -q --xml $(CPPCHECKFLAGS) \
                    --output-file=$@ $<
 
 quiet_cmd_merge_cppcheck_reports = CPPCHECK-MERGE $@
-cmd_merge_cppcheck_reports = $(srctree)/tools/merge_cppcheck_reports.py $^ $@
+cmd_merge_cppcheck_reports = $(PYTHON) $(srctree)/tools/merge_cppcheck_reports.py $^ $@
 
 quiet_cmd_cppcheck_html = CPPCHECK-HTML $<
 cmd_cppcheck_html = $(CPPCHECK_HTMLREPORT) --file=$< --source-dir=$(srctree) \
@@ -689,7 +727,7 @@ ifeq ($(CPPCHECKFILES),)
 endif
 	$(call if_changed,merge_cppcheck_reports)
 
-$(objtree)/%.c.cppcheck: $(srctree)/%.c $(objtree)/include/generated/autoconf.h $(objtree)/include/generated/compiler-def.h | cppcheck-version
+$(objtree)/%.c.cppcheck: $(srctree)/%.c $(CPPCHECKDEPS) | cppcheck-version
 	$(call if_changed,cppcheck_xml)
 
 cppcheck-version:
@@ -701,6 +739,18 @@ cppcheck-version:
 		echo "Please upgrade your cppcheck to version 2.7 or greater"; \
 		exit 1; \
 	fi
+
+# List of Misra rules to respect is written inside a doc.
+# In order to have some helpful text in the cppcheck output, generate a text
+# file containing the rules identifier, classification and text from the Xen
+# documentation file. Also generate a json file with the right arguments for
+# cppcheck in json format including the list of rules to ignore.
+#
+cppcheck-misra.txt: $(XEN_ROOT)/docs/misra/rules.rst $(srctree)/tools/convert_misra_doc.py
+	$(Q)$(PYTHON) $(srctree)/tools/convert_misra_doc.py -i $< -o $@ -j $(@:.txt=.json)
+
+# convert_misra_doc is generating both files.
+cppcheck-misra.json: cppcheck-misra.txt
 
 # Put this in generated headers this way it is cleaned by include/Makefile
 $(objtree)/include/generated/compiler-def.h:

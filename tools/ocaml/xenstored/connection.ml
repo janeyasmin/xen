@@ -125,9 +125,7 @@ let get_perm con =
 let set_target con target_domid =
 	con.perm <- Perms.Connection.set_target (get_perm con) ~perms:[Perms.READ; Perms.WRITE] target_domid
 
-let is_backend_mmap con = match con.xb.Xenbus.Xb.backend with
-	| Xenbus.Xb.Xenmmap _ -> true
-	| _ -> false
+let is_backend_mmap con = Xenbus.Xb.is_mmap con.xb
 
 let send_reply con tid rid ty data =
 	if (String.length data) > xenstore_payload_max && (is_backend_mmap con) then
@@ -280,9 +278,7 @@ let get_transaction con tid =
 
 let do_input con = Xenbus.Xb.input con.xb
 let has_input con = Xenbus.Xb.has_in_packet con.xb
-let has_partial_input con = match con.xb.Xenbus.Xb.partial_in with
-	| HaveHdr _ -> true
-	| NoHdr (n, _) -> n < Xenbus.Partial.header_size ()
+let has_partial_input con = Xenbus.Xb.has_partial_input con.xb
 let pop_in con = Xenbus.Xb.get_in_packet con.xb
 let has_more_input con = Xenbus.Xb.has_more_input con.xb
 
@@ -313,7 +309,6 @@ let is_bad con = match con.dom with None -> false | Some dom -> Domain.is_bad_do
 let has_extra_connection_data con =
 	let has_in = has_input con || has_partial_input con in
 	let has_out = has_output con in
-	let has_socket = con.dom = None in
 	let has_nondefault_perms = make_perm con.dom <> con.perm in
 	has_in || has_out
 	(* TODO: what about SIGTERM, should use systemd to store FDS

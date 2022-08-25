@@ -151,8 +151,12 @@
 #define p2m_pod_offline_or_broken_replace(pg) BUG_ON(pg != NULL)
 #endif
 
-#ifndef PGC_reserved
-#define PGC_reserved 0
+#ifndef PGC_static
+#define PGC_static 0
+#endif
+
+#ifndef PGT_TYPE_INFO_INITIALIZER
+#define PGT_TYPE_INFO_INITIALIZER 0
 #endif
 
 /*
@@ -1024,7 +1028,7 @@ static struct page_info *alloc_heap_pages(
                                 &tlbflush_timestamp);
 
         /* Initialise fields which have other uses for free pages. */
-        pg[i].u.inuse.type_info = 0;
+        pg[i].u.inuse.type_info = PGT_TYPE_INFO_INITIALIZER;
         page_set_owner(&pg[i], NULL);
 
     }
@@ -1479,6 +1483,7 @@ static void free_heap_pages(
             /* Merge with predecessor block? */
             if ( !mfn_valid(page_to_mfn(predecessor)) ||
                  !page_state_is(predecessor, free) ||
+                 (predecessor->count_info & PGC_static) ||
                  (PFN_ORDER(predecessor) != order) ||
                  (phys_to_nid(page_to_maddr(predecessor)) != node) )
                 break;
@@ -1502,6 +1507,7 @@ static void free_heap_pages(
             /* Merge with successor block? */
             if ( !mfn_valid(page_to_mfn(successor)) ||
                  !page_state_is(successor, free) ||
+                 (successor->count_info & PGC_static) ||
                  (PFN_ORDER(successor) != order) ||
                  (phys_to_nid(page_to_maddr(successor)) != node) )
                 break;
@@ -1778,16 +1784,58 @@ int query_page_offline(mfn_t mfn, uint32_t *status)
 }
 
 /*
- * Hand the specified arbitrary page range to the specified heap zone
- * checking the node_id of the previous page.  If they differ and the
- * latter is not on a MAX_ORDER boundary, then we reserve the page by
- * not freeing it to the buddy allocator.
+ * This function should only be called with valid pages from the same NUMA
+ * node and zone.
  */
+static void _init_heap_pages(const struct page_info *pg,
+                             unsigned long nr_pages,
+                             bool need_scrub)
+{
+    unsigned long s, e;
+    unsigned int nid = phys_to_nid(page_to_maddr(pg));
+
+    s = mfn_x(page_to_mfn(pg));
+    e = mfn_x(mfn_add(page_to_mfn(pg + nr_pages - 1), 1));
+    if ( unlikely(!avail[nid]) )
+    {
+        bool use_tail = IS_ALIGNED(s, 1UL << MAX_ORDER) &&
+                        (find_first_set_bit(e) <= find_first_set_bit(s));
+        unsigned long n;
+
+        n = init_node_heap(nid, s, nr_pages, &use_tail);
+        BUG_ON(n > nr_pages);
+        if ( use_tail )
+            e -= n;
+        else
+            s += n;
+    }
+
+    while ( s < e )
+    {
+        /*
+         * For s == 0, we simply use the largest increment by checking the
+         * MSB of the region size. For s != 0, we also need to ensure that the
+         * chunk is properly sized to end at power-of-two alignment. We do this
+         * by checking the LSB of the start address and use its index as
+         * the increment. Both cases need to be bounded by MAX_ORDER.
+         *
+         * Note that the value of ffsl() and flsl() starts from 1 so we need
+         * to decrement it by 1.
+         */
+        unsigned int inc_order = min(MAX_ORDER, flsl(e - s) - 1);
+
+        if ( s )
+            inc_order = min(inc_order, ffsl(s) - 1U);
+        free_heap_pages(mfn_to_page(_mfn(s)), inc_order, need_scrub);
+        s += (1UL << inc_order);
+    }
+}
+
 static void init_heap_pages(
     struct page_info *pg, unsigned long nr_pages)
 {
     unsigned long i;
-    bool idle_scrub = false;
+    bool need_scrub = scrub_debug;
 
     /*
      * Keep MFN 0 away from the buddy allocator to avoid crossing zone
@@ -1812,35 +1860,45 @@ static void init_heap_pages(
     spin_unlock(&heap_lock);
 
     if ( system_state < SYS_STATE_active && opt_bootscrub == BOOTSCRUB_IDLE )
-        idle_scrub = true;
+        need_scrub = true;
 
-    for ( i = 0; i < nr_pages; i++ )
+    for ( i = 0; i < nr_pages; )
     {
-        unsigned int nid = phys_to_nid(page_to_maddr(pg+i));
+#ifdef CONFIG_SEPARATE_XENHEAP
+        unsigned int zone = page_to_zone(pg);
+#endif
+        unsigned int nid = phys_to_nid(page_to_maddr(pg));
+        unsigned long left = nr_pages - i;
+        unsigned long contig_pages;
 
-        if ( unlikely(!avail[nid]) )
+        /*
+         * _init_heap_pages() is only able to accept range following
+         * specific property (see comment on top of _init_heap_pages()).
+         *
+         * So break down the range in smaller set.
+         */
+        for ( contig_pages = 1; contig_pages < left; contig_pages++ )
         {
-            unsigned long s = mfn_x(page_to_mfn(pg + i));
-            unsigned long e = mfn_x(mfn_add(page_to_mfn(pg + nr_pages - 1), 1));
-            bool use_tail = (nid == phys_to_nid(pfn_to_paddr(e - 1))) &&
-                            !(s & ((1UL << MAX_ORDER) - 1)) &&
-                            (find_first_set_bit(e) <= find_first_set_bit(s));
-            unsigned long n;
-
-            n = init_node_heap(nid, mfn_x(page_to_mfn(pg + i)), nr_pages - i,
-                               &use_tail);
-            BUG_ON(i + n > nr_pages);
-            if ( n && !use_tail )
-            {
-                i += n - 1;
-                continue;
-            }
-            if ( i + n == nr_pages )
+            /*
+             * No need to check for the zone when !CONFIG_SEPARATE_XENHEAP
+             * because free_heap_pages() can only take power-of-two ranges
+             * which never cross zone boundaries. But for separate xenheap
+             * which is manually defined, it is possible for power-of-two
+             * range to cross zones.
+             */
+#ifdef CONFIG_SEPARATE_XENHEAP
+            if ( zone != page_to_zone(pg + contig_pages) )
                 break;
-            nr_pages -= n;
+#endif
+
+            if ( nid != (phys_to_nid(page_to_maddr(pg + contig_pages))) )
+                break;
         }
 
-        free_heap_pages(pg + i, 0, scrub_debug || idle_scrub);
+        _init_heap_pages(pg, contig_pages, need_scrub);
+
+        pg += contig_pages;
+        i += contig_pages;
     }
 }
 
@@ -2286,7 +2344,7 @@ int assign_pages(
 
         for ( i = 0; i < nr; i++ )
         {
-            ASSERT(!(pg[i].count_info & ~(PGC_extra | PGC_reserved)));
+            ASSERT(!(pg[i].count_info & ~(PGC_extra | PGC_static)));
             if ( pg[i].count_info & PGC_extra )
                 extra_pages++;
         }
@@ -2346,7 +2404,7 @@ int assign_pages(
         page_set_owner(&pg[i], d);
         smp_wmb(); /* Domain pointer must be visible before updating refcnt. */
         pg[i].count_info =
-            (pg[i].count_info & (PGC_extra | PGC_reserved)) | PGC_allocated | 1;
+            (pg[i].count_info & (PGC_extra | PGC_static)) | PGC_allocated | 1;
 
         page_list_add_tail(&pg[i], page_to_list(d, &pg[i]));
     }
@@ -2652,8 +2710,8 @@ void __init free_staticmem_pages(struct page_info *pg, unsigned long nr_mfns,
             scrub_one_page(pg);
         }
 
-        /* In case initializing page of static memory, mark it PGC_reserved. */
-        pg[i].count_info |= PGC_reserved;
+        /* In case initializing page of static memory, mark it PGC_static. */
+        pg[i].count_info |= PGC_static;
     }
 }
 
@@ -2682,8 +2740,8 @@ static struct page_info * __init acquire_staticmem_pages(mfn_t smfn,
 
     for ( i = 0; i < nr_mfns; i++ )
     {
-        /* The page should be reserved and not yet allocated. */
-        if ( pg[i].count_info != (PGC_state_free | PGC_reserved) )
+        /* The page should be static and not yet allocated. */
+        if ( pg[i].count_info != (PGC_state_free | PGC_static) )
         {
             printk(XENLOG_ERR
                    "pg[%lu] Static MFN %"PRI_mfn" c=%#lx t=%#x\n",
@@ -2697,12 +2755,12 @@ static struct page_info * __init acquire_staticmem_pages(mfn_t smfn,
                                 &tlbflush_timestamp);
 
         /*
-         * Preserve flag PGC_reserved and change page state
+         * Preserve flag PGC_static and change page state
          * to PGC_state_inuse.
          */
-        pg[i].count_info = PGC_reserved | PGC_state_inuse;
+        pg[i].count_info = PGC_static | PGC_state_inuse;
         /* Initialise fields which have other uses for free pages. */
-        pg[i].u.inuse.type_info = 0;
+        pg[i].u.inuse.type_info = PGT_TYPE_INFO_INITIALIZER;
         page_set_owner(&pg[i], NULL);
     }
 
@@ -2722,7 +2780,7 @@ static struct page_info * __init acquire_staticmem_pages(mfn_t smfn,
 
  out_err:
     while ( i-- )
-        pg[i].count_info = PGC_reserved | PGC_state_free;
+        pg[i].count_info = PGC_static | PGC_state_free;
 
     spin_unlock(&heap_lock);
 

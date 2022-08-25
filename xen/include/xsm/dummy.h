@@ -15,6 +15,9 @@
  *  value of action.
  */
 
+#ifndef __XEN_XSM_DUMMY_H__
+#define __XEN_XSM_DUMMY_H__
+
 #include <xen/sched.h>
 #include <xsm/xsm.h>
 #include <public/hvm/params.h>
@@ -99,6 +102,23 @@ static always_inline int xsm_default_action(
         LINKER_BUG_ON(1);
         return -EPERM;
     }
+}
+
+static XSM_INLINE int cf_check xsm_set_system_active(void)
+{
+    struct domain *d = current->domain;
+
+    ASSERT(d->is_privileged);
+
+    if ( d->domain_id != DOMID_IDLE )
+    {
+        printk("%s: should only be called by idle domain\n", __func__);
+        return -EPERM;
+    }
+
+    d->is_privileged = false;
+
+    return 0;
 }
 
 static XSM_INLINE void cf_check xsm_security_domaininfo(
@@ -826,3 +846,5 @@ static XSM_INLINE int cf_check xsm_domain_resource_map(
     XSM_ASSERT_ACTION(XSM_DM_PRIV);
     return xsm_default_action(action, current->domain, d);
 }
+
+#endif /* __XEN_XSM_DUMMY_H__ */
