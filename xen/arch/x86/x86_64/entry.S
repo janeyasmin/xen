@@ -152,6 +152,7 @@ ENTRY(early_page_fault)
 
         .section .text.entry, "ax", @progbits
 
+.pushsection .text.entry.restore_all_guest, "ax", @progbits
 /* %rbx: struct vcpu, interrupts disabled */
 SYM_CODE_START_LOCAL(restore_all_guest)
         ASSERT_INTERRUPTS_DISABLED
@@ -241,6 +242,9 @@ SYM_INNER_LABEL_LOCAL(iret_exit_to_guest)
 .Lft0:  iretq
         _ASM_PRE_EXTABLE(.Lft0, handle_exception)
 SYM_CODE_END(restore_all_guest)
+
+	ALIGN
+	.popsection
 
 /*
  * When entering SYSCALL from kernel mode:
@@ -632,6 +636,8 @@ ENTRY(dom_crash_sync_extable)
 #endif
         xorl  %edi,%edi
         jmp   asm_domain_crash_synchronous /* Does not return */
+
+	ALIGN
         .popsection
 #endif /* CONFIG_PV */
 
