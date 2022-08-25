@@ -136,6 +136,8 @@ static inline void common_livepatch_apply(struct livepatch_func *func)
 
     arch_livepatch_apply(func);
     func->applied = LIVEPATCH_FUNC_APPLIED;
+
+    printk("*** %s applied ***\n", func->name);
 }
 
 static inline void common_livepatch_revert(struct livepatch_func *func)

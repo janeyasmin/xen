@@ -69,6 +69,9 @@ struct payload {
     unsigned int n_unload_funcs;         /* Nr of funcs to call durung unload. */
     char name[XEN_LIVEPATCH_NAME_SIZE];  /* Name of it. */
     struct livepatch_metadata metadata;  /* Module meta data record */
+    const void *textentry_addr;          /* Virtual address of .text.entry.{restore_all_guest} */
+    size_t textentry_sh_size;            /* .. and its size */
+
 };
 
 /*

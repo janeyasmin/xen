@@ -387,6 +387,13 @@ static int move_payload(struct payload *payload, struct livepatch_elf *elf)
             }
             else
                 memset(elf->sec[i].load_addr, 0, elf->sec[i].sec->sh_size);
+
+            if ( !strcmp(elf->sec[i].name, ".text.entry.restore_all_guest") )
+            {
+                payload->textentry_addr = elf->sec[i].load_addr;
+                payload->textentry_sh_size = elf->sec[i].sec->sh_size;
+                printk("*** Loaded textentry_addr and textentry_size***\n");
+            }
         }
     }
 
@@ -655,10 +662,13 @@ static int prepare_payload(struct payload *payload,
                            struct livepatch_elf *elf)
 {
     const struct livepatch_elf_sec *sec;
-    unsigned int i;
+    unsigned int i, off;
     struct livepatch_func *f;
     struct virtual_region *region;
     const Elf_Note *n;
+    int rc;
+    root_pgentry_t *rpt;
+    unsigned int cpu = smp_processor_id();
 
     sec = livepatch_elf_sec_by_name(elf, ELF_LIVEPATCH_FUNC);
     if ( sec )
@@ -876,6 +886,24 @@ static int prepare_payload(struct payload *payload,
             return -EINVAL;
         }
     }
+
+#ifdef CONFIG_X86
+    sec = livepatch_elf_sec_by_name(elf, ".text.entry.restore_all_guest");
+    if ( sec )
+    {
+        for ( rc = off = 0; !rc && off < sec->sec->sh_size; off += PAGE_SIZE )
+        {
+            printk("*** sh_size = %lu, off = %d, load_addr+off = %p, data = %p ***\n",
+                   sec->sec->sh_size, off, sec->load_addr + off, sec->data);
+            printk("*** load_addr[3]  = %d, data[3] = %d, load_addr[500] = %d, data[500] = %d ***\n",
+                   *((int*)(sec->load_addr) + 3), *((int*)(sec->data) + 3),
+                   *((int*)(sec->load_addr) + 500), *((int*)(sec->data) + 500));
+            rpt = per_cpu(root_pgt, cpu);
+            if ( !(rc = clone_mapping(sec->load_addr + off, rpt, true)) )
+                    printk("*** clone mapping succeeded (alloc_only) ***\n");
+        }
+    }
+#endif
 
     return 0;
 }
@@ -1639,6 +1667,9 @@ void check_for_livepatch_work(void)
     unsigned int cpu = smp_processor_id();
     s_time_t timeout;
     unsigned long flags;
+    int rc;
+    unsigned int off;
+    root_pgentry_t *rpt;
 
     /* Only do any work when invoked in truly idle state. */
     if ( system_state != SYS_STATE_active ||
@@ -1715,6 +1746,19 @@ void check_for_livepatch_work(void)
         if ( !livepatch_spin(&livepatch_work.semaphore, timeout, cpus, "IRQ") )
         {
             local_irq_save(flags);
+
+#ifdef CONFIG_X86
+            for ( rc = off = 0; !rc && off < p->textentry_sh_size; off += PAGE_SIZE )
+            {
+                printk("*** sh_size = %lu, off = %d, load_addr+off = %p ***\n",
+                       p->textentry_sh_size, off, p->textentry_addr + off);
+                printk("*** load_addr[3]  = %d ***\n", *((int*)(p->textentry_addr) + 3));
+
+                rpt = per_cpu(root_pgt, cpu);
+                if ( !(rc = clone_mapping(p->textentry_addr + off, rpt, false)) )
+                    printk("*** clone mapping succeeded ***\n");
+            }
+#endif
             /* Do the patching. */
             livepatch_do_action();
             /* Serialize and flush out the CPU via CPUID instruction (on x86). */

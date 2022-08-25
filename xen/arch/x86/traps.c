@@ -1592,6 +1592,9 @@ void do_page_fault(struct cpu_user_regs *regs)
     if ( error_code & PFEC_shstk )
         goto fatal;
 
+    if ( addr >= XEN_VIRT_START && addr < XEN_VIRT_END )
+        goto fatal;
+
     if ( unlikely(fixup_page_fault(addr, regs) != 0) )
         return;
 

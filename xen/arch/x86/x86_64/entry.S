@@ -241,9 +241,8 @@ SYM_INNER_LABEL_LOCAL(iret_exit_to_guest)
         addq  $8,%rsp
 .Lft0:  iretq
         _ASM_PRE_EXTABLE(.Lft0, handle_exception)
-SYM_CODE_END(restore_all_guest)
 
-	ALIGN
+SYM_CODE_END(restore_all_guest)
 	.popsection
 
 /*

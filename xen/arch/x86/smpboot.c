@@ -692,7 +692,7 @@ void cpu_exit_clear(unsigned int cpu)
     set_cpu_state(CPU_STATE_DEAD);
 }
 
-static int clone_mapping(const void *ptr, root_pgentry_t *rpt)
+int clone_mapping(const void *ptr, root_pgentry_t *rpt, bool alloc_only)
 {
     unsigned long linear = (unsigned long)ptr, pfn;
     unsigned int flags;
@@ -798,12 +798,18 @@ static int clone_mapping(const void *ptr, root_pgentry_t *rpt)
         ASSERT(!(l2e_get_flags(*pl2e) & _PAGE_PSE));
         pl1e = map_l1t_from_l2e(*pl2e);
     }
+    if ( alloc_only == true )
+	goto out;
 
     pl1e += l1_table_offset(linear);
     flags &= ~_PAGE_GLOBAL;
 
     if ( l1e_get_flags(*pl1e) & _PAGE_PRESENT )
     {
+	if ((l1e_get_pfn(*pl1e) != pfn))
+	    printk("*** l1e_get_pfn(*pl1e) = %lu, pfn = %lu ***\n",
+		   l1e_get_pfn(*pl1e), pfn);
+
         ASSERT(l1e_get_pfn(*pl1e) == pfn);
         ASSERT(l1e_get_flags(*pl1e) == flags);
     }
@@ -850,9 +856,10 @@ int setup_cpu_root_pgt(unsigned int cpu)
     {
         const char *ptr;
 
+	printk("*** _stextentry = %p, _etextentry = %p ***\n",  _stextentry, _etextentry);
         for ( rc = 0, ptr = _stextentry;
               !rc && ptr < _etextentry; ptr += PAGE_SIZE )
-            rc = clone_mapping(ptr, rpt);
+            rc = clone_mapping(ptr, rpt, false);
 
         if ( rc )
             return rc;
@@ -864,20 +871,20 @@ int setup_cpu_root_pgt(unsigned int cpu)
 
     /* Install direct map page table entries for stack, IDT, and TSS. */
     for ( off = rc = 0; !rc && off < STACK_SIZE; off += PAGE_SIZE )
-        rc = clone_mapping(__va(__pa(stack_base[cpu])) + off, rpt);
+        rc = clone_mapping(__va(__pa(stack_base[cpu])) + off, rpt, false);
 
     if ( !rc )
-        rc = clone_mapping(idt_tables[cpu], rpt);
+        rc = clone_mapping(idt_tables[cpu], rpt, false);
     if ( !rc )
     {
         struct tss_page *ptr = &per_cpu(tss_page, cpu);
 
         BUILD_BUG_ON(sizeof(*ptr) != PAGE_SIZE);
 
-        rc = clone_mapping(&ptr->tss, rpt);
+        rc = clone_mapping(&ptr->tss, rpt, false);
     }
     if ( !rc )
-        rc = clone_mapping((void *)per_cpu(stubs.addr, cpu), rpt);
+        rc = clone_mapping((void *)per_cpu(stubs.addr, cpu), rpt, false);
 
     return rc;
 }

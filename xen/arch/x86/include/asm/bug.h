@@ -101,8 +101,8 @@ extern const struct bug_frame __start_bug_frames[],
 
     .L\@ud: ud2a
 
-    .pushsection .rodata.str1, "aMS", @progbits, 1
-         .L\@s1: .asciz "\file_str"
+    .pushsection .rodata.str1.1, "aMS", @progbits, 1
+         .LC\@s1: .asciz "\file_str"
     .popsection
 
     .pushsection .bug_frames.\type, "a", @progbits
@@ -110,14 +110,14 @@ extern const struct bug_frame __start_bug_frames[],
         .L\@bf:
         .long (.L\@ud - .L\@bf) + \
                ((\line >> BUG_LINE_LO_WIDTH) << BUG_DISP_WIDTH)
-        .long (.L\@s1 - .L\@bf) + \
+        .long (.LC\@s1 - .L\@bf) + \
                ((\line & ((1 << BUG_LINE_LO_WIDTH) - 1)) << BUG_DISP_WIDTH)
 
         .if \second_frame
-            .pushsection .rodata.str1, "aMS", @progbits, 1
-                .L\@s2: .asciz "\msg"
+            .pushsection .rodata.str1.1, "aMS", @progbits, 1
+                .LC\@s2: .asciz "\msg"
             .popsection
-            .long 0, (.L\@s2 - .L\@bf)
+            .long 0, (.LC\@s2 - .L\@bf)
         .endif
     .popsection
     .endm

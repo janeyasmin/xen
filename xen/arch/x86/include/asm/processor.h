@@ -637,6 +637,8 @@ enum ap_boot_method {
 };
 extern enum ap_boot_method ap_boot_method;
 
+int clone_mapping(const void *ptr, root_pgentry_t *rpt, bool alloc_only);
+
 #endif /* !__ASSEMBLY__ */
 
 #endif /* __ASM_X86_PROCESSOR_H */
